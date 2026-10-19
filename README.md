@@ -87,11 +87,11 @@ cargo build -p grok-desktop --release
 Linux bundles (`deb`, `AppImage`) use the same toolchain. From `desktop/src-tauri`, after the frontend build:
 
 ```sh
-cargo install tauri-cli --version 2.10.3 --locked
+cargo install tauri-cli --version 2.10.1 --locked
 cd desktop && npx tauri build
 ```
 
-Pin the Tauri crates to the 2.10.3 set already listed in `desktop/src-tauri/Cargo.toml`. Newer patch releases of `tauri-runtime`, `wry`, and `tauri-macros` do not compile together.
+Pin the Tauri crates to the 2.10.3 set already listed in `desktop/src-tauri/Cargo.toml`. The published `tauri-cli` / `@tauri-apps/cli` line stops at 2.10.1. Newer patch releases of `tauri-runtime`, `wry`, and `tauri-macros` do not compile together.
 
 ## Build and run the original CLI / TUI
 

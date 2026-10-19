@@ -155,7 +155,7 @@ jobs:
 
       - name: Frontend dependencies
         working-directory: desktop
-        run: npm ci && npm install --no-save @tauri-apps/cli@2.10.3
+        run: npm ci && npm install --no-save @tauri-apps/cli@2.10.1
 
       - name: Build the CLI (xai-grok-pager)
         env:

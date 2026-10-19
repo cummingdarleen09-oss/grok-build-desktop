@@ -85,14 +85,14 @@ cargo build -p grok-desktop --release
 ./target/release/grok-desktop
 ```
 
-Linux 的 `deb` 和 `AppImage` 使用同一套工具链。先构建前端，再在仓库里安装与源码锁定一致的 Tauri CLI：
+Linux 的 `deb` 和 `AppImage` 使用同一套工具链。先构建前端，再安装已发布的 Tauri CLI（2.10.1；没有 2.10.3）：
 
 ```sh
-cargo install tauri-cli --version 2.10.3 --locked
+cargo install tauri-cli --version 2.10.1 --locked
 cd desktop && npx tauri build
 ```
 
-`desktop/src-tauri/Cargo.toml` 把 Tauri 相关 crate 锁在 2.10.3 这一组。`tauri-runtime`、`wry`、`tauri-macros` 的更新补丁不能混用，否则编不过。
+`desktop/src-tauri/Cargo.toml` 把 Tauri 相关 crate 锁在 2.10.3 这一组。CLI 只有 2.10.1。`tauri-runtime`、`wry`、`tauri-macros` 的更新补丁不能混用，否则编不过。
 
 ## 编译并运行原来的 CLI / TUI
 
