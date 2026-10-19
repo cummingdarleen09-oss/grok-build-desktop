@@ -208,12 +208,31 @@ jobs:
           includeUpdaterJson: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
           releaseBody: |
+            ## English
+
+            Cursor-style desktop window, modeled on grok-app: sessions under repositories, kanban, project media, automations while the window is open, and Ctrl/Cmd+K search. The classic terminal page is gone. The standalone CLI binary still ships.
+
+            Unlimited custom providers. Each one picks a display name, one API format (Anthropic Messages, OpenAI Chat Completions, or OpenAI Responses), a base URL, a keychain API key, and a model list. DeepSeek, Kimi, OpenAI, and Claude are optional templates. Official Grok stays built in, follows the newest model by default, and signs in inside the app (system browser, same OAuth flow as the CLI, shared `auth.json`). An OAuth session is preferred over an API key.
+
+            Branch from a message with the icon in the hover bar. Stdio MCP servers are called during a turn. Mermaid fences render in the transcript.
+
             Unsigned builds, unless Apple or Windows signing secrets are configured on this repository.
 
             Desktop installers: Windows `.msi` and NSIS `.exe`, macOS `.dmg` for Apple Silicon and Intel, Linux `.deb` and `.AppImage`.
             CLI assets are named `grok-<target>` and are the `xai-grok-pager` binary. Put one on `PATH` as `grok` or `xai-grok-pager`, or set `GROK_BIN`.
 
-            See README.md for the newest-model rule and for how to add code-signing secrets.
+            ## 中文
+
+            桌面窗口改成 Cursor 式布局，并参考 grok-app：仓库下的会话、看板、项目媒体、窗口开着时触发的自动化，以及 Ctrl/Cmd+K 搜索。经典终端页面已去掉。独立的命令行二进制仍随发布包提供。
+
+            自定义提供商不再有数量上限。每一项自选显示名称、一种接口格式（Anthropic Messages、OpenAI Chat Completions 或 OpenAI Responses）、接口地址、钥匙串密钥和模型列表。DeepSeek、Kimi、OpenAI、Claude 只是可选模板。官方 Grok 仍是内置项，默认跟随最新模型，并在应用内登录（系统浏览器，与命令行相同的 OAuth 流程，共用 `auth.json`）。有 OAuth 会话时优先于 API 密钥。
+
+            悬停消息时用图标从该消息分支。对话回合会调用 stdio MCP。记录里的 Mermaid 图会渲染出来。
+
+            若仓库未配置 Apple 或 Windows 签名密钥，安装包未签名。
+
+            桌面安装包：Windows 的 `.msi` 和 NSIS `.exe`，Apple Silicon 与 Intel 的 macOS `.dmg`，Linux 的 `.deb` 和 `.AppImage`。
+            名为 `grok-<target>` 的文件是 `xai-grok-pager` 命令行。放到 `PATH` 里并改名为 `grok` 或 `xai-grok-pager`，或设置 `GROK_BIN`。
 
       - name: Attach the CLI binary to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
