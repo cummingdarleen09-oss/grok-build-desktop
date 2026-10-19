@@ -26,7 +26,7 @@ pub use config_merge::{
     merge_env_presets_with, merge_store_presets, providers_path, save_provider_store,
     save_provider_store_to, sync_cli_config, upsert_cli_config,
 };
-pub use presets::{Preset, builtin_presets, default_store, normalize_store};
+pub use presets::{Preset, builtin_presets, default_store, normalize_store, template_presets};
 pub use secrets::{SecretLocation, SecretStore};
 pub use stream::{
     AnthropicAcc, AssistantBuild, OpenAiAcc, ResponsesAcc, SseDecoder, SseEvent,
@@ -35,7 +35,9 @@ pub use stream::{
 pub use translate::{anthropic_request_body, endpoint_url, openai_request_body};
 pub use types::*;
 pub use xai_auth::{has_login_session, pick_xai_secret};
-pub use xai_models::{apply_choice, refresh_xai_models, refresh_xai_models_blocking};
+pub use xai_models::{
+    apply_choice, fetch_provider_models, refresh_xai_models, refresh_xai_models_blocking,
+};
 
 /// Read `~/.grok/providers.toml` (or `$GROK_HOME/providers.toml`) and the
 /// process environment, and fold any configured third-party providers into a

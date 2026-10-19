@@ -13,7 +13,7 @@ English: [README.md](README.md).
 - **分支**：在任意一条消息上选择「从这里分支」，会把第 1 到第 N 条消息复制到一段新对话（同一项目、同一供应商和模型），原对话保持不变。编辑过去的用户消息并重发，会从那条消息之前分出新分支，再用修改后的文本继续。如果分支点落在一轮工具调用的中间，已完成的工具结果会保留，没有输出的调用会被丢掉，模型收到的就是这段截断后的历史。
 - **工作台**：窗口采用 Cursor 桌面的布局（新对话、搜索、自动化、自定义、仓库树），并吸收了 [grok-app](https://github.com/RongleCat/grok-app)（MIT，Copyright (c) 2026 RongleCat）的工作台想法：会话、对话看板、项目媒体预览、定时自动化。浅色和深色主题。窗口里不再嵌入经典终端；`xai-grok-pager` 仍是单独发布的二进制。
 - **MCP 与图**：`config.toml` 里的 stdio MCP 会在桌面对话中被列出并调用。Mermaid 代码块用仓库里的 `mermaid-to-svg` 渲染。计划模式不会改文件，也不会执行命令。
-- **供应商**（`grok-providers`）：xAI/Grok（Responses API，默认供应商）、OpenAI 兼容的 Chat Completions，以及 Anthropic Messages。支持流式输出和工具调用。内置 Grok、DeepSeek、月之暗面 Kimi、通用 OpenAI、Claude。这三种协议都可以添加自定义供应商。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。Grok 会复用 `grok login` 的登录会话。
+- **供应商**（`grok-providers`）：用户可以添加任意多个提供商。每个提供商有显示名称、三种接口格式之一（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses API）、接口地址、钥匙串里的密钥，以及模型列表。DeepSeek、月之暗面 Kimi、OpenAI、Claude 只是可选模板，不是固定厂商列表。Grok 仍是内置项，默认始终使用最新模型。Responses 请求是通用的 OpenAI 形态，基址用你填写的地址。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。Grok 会复用 `grok login` 的登录会话。
 
 ## 结构
 
@@ -222,7 +222,7 @@ export DEEPSEEK_MODEL=deepseek-chat          # 可选
 export DEEPSEEK_BASE_URL=https://api.deepseek.com   # 可选
 ```
 
-在桌面应用里：设置 → 启用 DeepSeek → 设为当前供应商 → 粘贴密钥 → 保存。密钥进入钥匙串或 `0600` 文件。同一环境下单独运行 CLI 时，进程仍会读取 `DEEPSEEK_API_KEY`。
+在桌面应用里：设置 → 自定义提供商 → 添加提供商 → DeepSeek 模板 → 粘贴密钥 → 保存。密钥进入钥匙串或 `0600` 文件，仍按原来的提供商 id 查找，已保存的密钥不会丢。同一环境下单独运行 CLI 时，进程仍会读取 `DEEPSEEK_API_KEY`。
 
 ### 月之暗面 Kimi
 

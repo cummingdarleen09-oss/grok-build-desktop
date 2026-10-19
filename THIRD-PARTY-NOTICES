@@ -1,8 +1,9 @@
 THIRD-PARTY NOTICES
 ================================================================================
 
-Workbench layout, automation records, and session/project/media ideas in the
-desktop UI are adapted from grok-app:
+Workbench layout, automation records, session/project/media ideas, and the
+Settings → Account → Custom providers panel in the desktop UI are adapted
+from grok-app:
 
   Source:    https://github.com/RongleCat/grok-app
   License:   MIT

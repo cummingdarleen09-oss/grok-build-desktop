@@ -20,6 +20,7 @@ export interface Provider {
   token_field: "max_tokens" | "max_completion_tokens";
   builtin: boolean;
   model_hints: string[];
+  models: string[];
   follow_latest: boolean;
 }
 
@@ -157,10 +158,8 @@ const memory = seed();
 function seed(): Bootstrap {
   const providers: Provider[] = [
     preset("xai", "Grok", "responses", "https://api.x.ai/v1", "grok-4.7", "XAI_API_KEY", "bearer", "max_tokens", 500000, ["grok-4.7", "grok-4.6", "grok-4.5"], true, true),
-    preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY", "bearer", "max_tokens", 128000, ["deepseek-chat", "deepseek-reasoner"], false, false),
-    preset("kimi", "Moonshot Kimi", "openai", "https://api.moonshot.cn/v1", "moonshot-v1-128k", "MOONSHOT_API_KEY", "bearer", "max_tokens", 128000, ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-latest"], false, false),
-    preset("openai", "OpenAI-compatible", "openai", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY", "bearer", "max_completion_tokens", 128000, ["gpt-4o", "gpt-4.1"], false, false),
-    preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "x_api_key", "max_tokens", 200000, ["claude-sonnet-4-5", "claude-opus-4-5"], false, false),
+    { ...preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY", "bearer", "max_tokens", 128000, ["deepseek-chat", "deepseek-reasoner"], true, false), builtin: false },
+    { ...preset("relay", "Work relay", "responses", "https://relay.example/v1", "gpt-5", "RELAY_API_KEY", "bearer", "max_tokens", 128000, ["gpt-5", "gpt-5-mini"], true, false), builtin: false, name: "Work relay" },
   ];
   const project = "/work/bohutongwxweb";
   const ads = "/work/tansuo/adspower";
@@ -213,8 +212,8 @@ function seed(): Bootstrap {
     id: "ads",
     title: "Investigate login timeout",
     cwd: ads,
-    provider_id: "openai",
-    model: "gpt-4o",
+    provider_id: "deepseek",
+    model: "deepseek-chat",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     messages: [msg("a1", "user", "The login request hangs after the second redirect.")],
@@ -223,8 +222,8 @@ function seed(): Bootstrap {
     id: "notes",
     title: "对照权限提示文案",
     cwd: notes,
-    provider_id: "kimi",
-    model: "moonshot-v1-128k",
+    provider_id: "relay",
+    model: "gpt-5",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     messages: [msg("n1", "user", "Keep a short list of follow-ups for this folder.")],
@@ -329,11 +328,29 @@ function preset(
     temperature: null,
     max_tokens: 8192,
     token_field,
-    builtin: true,
+    builtin: id === "xai",
     model_hints,
+    models: model_hints.includes(model) ? model_hints : [model, ...model_hints],
     follow_latest,
   };
 }
+
+export function providerModels(provider: Provider): string[] {
+  const source = provider.models?.length ? provider.models : provider.model_hints ?? [];
+  const models: string[] = [];
+  for (const id of [...source, provider.model]) {
+    const trimmed = id?.trim();
+    if (trimmed && !models.includes(trimmed)) models.push(trimmed);
+  }
+  return models;
+}
+
+export const providerTemplates: Array<Pick<Provider, "id" | "name" | "format" | "base_url" | "model" | "env_key" | "auth" | "token_field" | "context_window" | "models">> = [
+  { id: "deepseek", name: "DeepSeek", format: "openai", base_url: "https://api.deepseek.com", model: "deepseek-chat", env_key: "DEEPSEEK_API_KEY", auth: "bearer", token_field: "max_tokens", context_window: 128000, models: ["deepseek-chat", "deepseek-reasoner"] },
+  { id: "kimi", name: "Moonshot Kimi", format: "openai", base_url: "https://api.moonshot.cn/v1", model: "moonshot-v1-128k", env_key: "MOONSHOT_API_KEY", auth: "bearer", token_field: "max_tokens", context_window: 128000, models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-latest"] },
+  { id: "openai", name: "OpenAI", format: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4o", env_key: "OPENAI_API_KEY", auth: "bearer", token_field: "max_completion_tokens", context_window: 128000, models: ["gpt-4o", "gpt-4.1"] },
+  { id: "anthropic", name: "Anthropic Claude", format: "anthropic", base_url: "https://api.anthropic.com/v1", model: "claude-sonnet-4-5", env_key: "ANTHROPIC_API_KEY", auth: "x_api_key", token_field: "max_tokens", context_window: 200000, models: ["claude-sonnet-4-5", "claude-opus-4-5"] },
+];
 
 function msg(id: string, role: "user" | "assistant", text: string): ChatMessage {
   return { id, role, text, reasoning: "", tool_calls: [] };
@@ -521,11 +538,34 @@ function remember(session: Session) {
   else memory.sessions.unshift(next);
 }
 
+export async function setChatModel(id: string, providerId: string, model: string): Promise<Session> {
+  if (!inTauri()) {
+    const session = memorySessions.get(id);
+    if (!session) throw new Error("missing session");
+    session.provider_id = providerId;
+    session.model = model;
+    remember(session);
+    return structuredClone(session);
+  }
+  return invoke<Session>("set_chat_model", { id, providerId, model });
+}
+
+export async function fetchModels(id: string, baseUrl: string, format: ProviderFormat, apiKey: string): Promise<string[]> {
+  if (!inTauri()) {
+    if (!baseUrl.trim()) throw new Error("base URL is required");
+    if (format === "anthropic") return ["claude-sonnet-4-5", "claude-opus-4-5"];
+    if (format === "responses") return ["gpt-5", "gpt-5-mini", "grok-4.7"];
+    return ["deepseek-chat", "deepseek-reasoner"];
+  }
+  return invoke<string[]>("fetch_models", { id, baseUrl, format, apiKey });
+}
+
 export async function sendPrompt(
   sessionId: string,
   text: string,
   onEvent: (event: AgentEvent) => void,
   plan = false,
+  model?: string,
 ): Promise<Session> {
   if (!inTauri()) {
     onEvent({ type: "reasoning_delta", text: "Browser preview has no model connected. " });
@@ -556,7 +596,7 @@ export async function sendPrompt(
     if (payload.payload.session_id === sessionId) onEvent(payload.payload.event);
   });
   try {
-    return await invoke<Session>("send_prompt", { sessionId, text, plan });
+    return await invoke<Session>("send_prompt", { sessionId, text, plan, model });
   } finally {
     unlisten();
   }
@@ -572,9 +612,9 @@ export async function resolveApproval(id: string, approved: boolean): Promise<vo
   await invoke("resolve_approval", { id, approved });
 }
 
-export async function testProvider(id: string): Promise<string> {
+export async function testProvider(id: string, model?: string): Promise<string> {
   if (!inTauri()) return "pong";
-  return invoke("test_provider", { id });
+  return invoke("test_provider", { id, model });
 }
 
 export async function openClassic(id: string): Promise<Session> {

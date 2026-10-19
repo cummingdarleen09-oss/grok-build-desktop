@@ -13,7 +13,6 @@ import {
   type Settings,
   branchChat,
   cancelPrompt,
-  clearSecret,
   createChat,
   gitInfo,
   loadAutomations,
@@ -22,18 +21,18 @@ import {
   openClassic,
   pickProjectFolder,
   projectMedia,
+  providerModels,
   removeChat,
   renameChat,
   renderDiagram,
   resolveApproval,
-  saveProviders,
   saveSettings,
   sendPrompt,
-  setSecret,
+  setChatModel,
   storeAutomations,
-  testProvider,
 } from "./api";
 import { branchBanner, desktopShortcuts, translate, type Key, type Lang } from "./i18n";
+import { ProvidersPanel } from "./ProvidersPanel";
 
 type Page = "chat" | "automations" | "kanban" | "media" | "customize" | "settings" | "shortcuts";
 type Hist = { page: Page; sessionId: string | null; readOnly: boolean };
@@ -75,6 +74,7 @@ export function App() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [git, setGit] = useState<GitInfo>({ current: "main", branches: ["main"] });
   const [branchName, setBranchName] = useState("main");
+  const [picked, setPicked] = useState<{ providerId: string; model: string } | null>(null);
   const [canBack, setCanBack] = useState(false);
   const [canForward, setCanForward] = useState(false);
   const bootRef = useRef<Bootstrap | null>(null);
@@ -219,12 +219,14 @@ export function App() {
   async function ensureChat(): Promise<Session | null> {
     if (!boot) return null;
     if (session && !readOnly) return session;
-    const provider = activeProvider(boot);
+    const chosen = boot.providers.providers.find((item) => item.id === picked?.providerId && item.enabled);
+    const provider = chosen ?? activeProvider(boot);
     if (!provider) {
       setPage("settings");
       return null;
     }
-    const created = await createChat(boot.settings.cwd, provider.id, provider.model, lang);
+    const model = picked && picked.providerId === provider.id ? picked.model : provider.model;
+    const created = await createChat(boot.settings.cwd, provider.id, model, lang);
     setSession(created);
     setReadOnly(false);
     await refresh(created.id);
@@ -284,7 +286,7 @@ export function App() {
       setBusy(true);
     }
     try {
-      const next = await sendPrompt(created.id, item.prompt, () => undefined, false);
+              const next = await sendPrompt(created.id, item.prompt, () => undefined, false, created.model);
       if (focus) setSession(next);
       else setNotice(item.title);
       await refresh(focus ? next.id : undefined);
@@ -446,7 +448,7 @@ export function App() {
                 if (replacement?.trim()) {
                   setBusy(true);
                   try {
-                    const next = await sendPrompt(created.id, replacement.trim(), () => undefined, plan);
+                    const next = await sendPrompt(created.id, replacement.trim(), () => undefined, plan, created.model);
                     setSession(next);
                     await refresh(next.id);
                   } finally { setBusy(false); }
@@ -454,10 +456,10 @@ export function App() {
               }}
               onSession={async (next) => { setSession(next); setBoot(await loadBootstrap()); }}
               onProvider={async (providerId, model) => {
+                setPicked({ providerId, model });
                 await patchSettings({ active_provider: providerId });
                 if (session && !readOnly) {
-                  const next = { ...session, provider_id: providerId, model };
-                  setSession(next);
+                  setSession(await setChatModel(session.id, providerId, model));
                 }
               }}
             />
@@ -589,7 +591,7 @@ function ChatStage(props: {
       if (event.type === "error") props.setError(event.message);
     };
     try {
-      const next = await sendPrompt(target.id, text.trim(), onEvent, props.plan);
+      const next = await sendPrompt(target.id, text.trim(), onEvent, props.plan, target.model);
       setLive("");
       setReasoning("");
       setTools([]);
@@ -625,6 +627,7 @@ function ChatStage(props: {
       branchName={props.branchName}
       setBranchName={props.setBranchName}
       cwd={session?.cwd || props.boot.settings.cwd}
+      model={session?.model || provider?.model || ""}
       onProvider={props.onProvider}
       onSend={() => void send(draft)}
       onAttach={() => {
@@ -684,8 +687,13 @@ function ChatStage(props: {
               {message.tool_calls.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
               {!props.readOnly && (
                 <div className="msg-actions">
-                  <button type="button" disabled={props.busy} onClick={() => void props.onBranch(message.id, true).catch((reason: unknown) => props.setError(String(reason)))}>{t("chat.branch")}</button>
-                  {message.role === "user" && editingId !== message.id && <button type="button" disabled={props.busy} onClick={() => { setEditingId(message.id); setEditText(message.text); }}>{t("chat.edit")}</button>}
+                  <button type="button" className="icon-btn" title={t("chat.copy")} aria-label={t("chat.copy")} onClick={() => void navigator.clipboard?.writeText(message.text).catch(() => undefined)}>
+                    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                  </button>
+                  <button type="button" className="icon-btn" title={t("chat.branch")} aria-label={t("chat.branch")} disabled={props.busy} onClick={() => void props.onBranch(message.id, true).catch((reason: unknown) => props.setError(String(reason)))}>
+                    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden><circle cx="6" cy="6" r="2.2" /><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M6 8.2v7.6M18 8.2a8 8 0 0 1-8 8" /></svg>
+                  </button>
+                  {message.role === "user" && editingId !== message.id && <button type="button" className="icon-btn" title={t("chat.edit")} aria-label={t("chat.edit")} disabled={props.busy} onClick={() => { setEditingId(message.id); setEditText(message.text); }}>{t("chat.edit")}</button>}
                   {editingId === message.id && <button type="button" className="primary" disabled={props.busy || !editText.trim()} onClick={() => { const text = editText; setEditingId(null); void props.onBranch(message.id, false, text); }}>{t("chat.resend")}</button>}
                 </div>
               )}
@@ -721,6 +729,46 @@ function ChatStage(props: {
   );
 }
 
+function ModelMenu(props: {
+  providers: Provider[];
+  providerId: string;
+  model: string;
+  onPick: (providerId: string, model: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = props.providers.find((item) => item.id === props.providerId);
+  const label = current ? `${current.name} · ${props.model || current.model}` : props.model || "Grok 4.7";
+  const groups = props.providers.filter((item) => item.enabled && providerModels(item).length > 0);
+  return (
+    <div className="model-menu" onClick={(event) => event.stopPropagation()}>
+      <button type="button" className="model-pick" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {label} ▾
+      </button>
+      {open && (
+        <div className="model-pop" role="listbox">
+          {groups.map((provider) => (
+            <div key={provider.id} className="model-group">
+              <div className="model-group__name">{provider.name}</div>
+              {providerModels(provider).map((model) => (
+                <button
+                  key={`${provider.id}-${model}`}
+                  type="button"
+                  role="option"
+                  aria-selected={provider.id === props.providerId && model === props.model}
+                  className={provider.id === props.providerId && model === props.model ? "on" : ""}
+                  onClick={() => { props.onPick(provider.id, model); setOpen(false); }}
+                >
+                  {model}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Composer(props: {
   t: (key: Key) => string;
   draft: string;
@@ -735,6 +783,7 @@ function Composer(props: {
   branchName: string;
   setBranchName: (value: string) => void;
   cwd: string;
+  model: string;
   onProvider: (id: string, model: string) => Promise<void>;
   onSend: () => void;
   onAttach: () => void;
@@ -768,12 +817,12 @@ function Composer(props: {
         />
         <div className="composer-actions">
           <button type="button" className="plus" onClick={props.onAttach}>+</button>
-          <select className="model-pick" value={props.provider?.id ?? ""} onChange={(event) => {
-            const next = props.providers.find((item) => item.id === event.target.value);
-            if (next) void props.onProvider(next.id, next.model);
-          }}>
-            {props.providers.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name} {item.model}</option>)}
-          </select>
+          <ModelMenu
+            providers={props.providers}
+            providerId={props.provider?.id ?? ""}
+            model={props.model || props.provider?.model || ""}
+            onPick={(providerId, model) => void props.onProvider(providerId, model)}
+          />
           {props.busy ? <button type="button" className="danger" onClick={() => void cancelPrompt()}>{props.t("chat.stop")}</button> : <button type="button" className="mic" onClick={props.onMic} aria-label="mic">●</button>}
         </div>
       </div>
@@ -1026,21 +1075,12 @@ function SettingsView(props: {
   const { t } = props;
   const [settings, setSettings] = useState(props.boot.settings);
   const [providers, setProviders] = useState(props.boot.providers.providers);
-  const [secrets, setSecrets] = useState(props.boot.secrets);
-  const [keys, setKeys] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
-  const [custom, setCustom] = useState<{ id: string; name: string; format: Provider["format"]; base_url: string; model: string; env_key: string }>({ id: "", name: "", format: "openai", base_url: "http://127.0.0.1:8000/v1", model: "", env_key: "CUSTOM_API_KEY" });
-  function update(id: string, patch: Partial<Provider>) {
-    setProviders((current) => current.map((provider) => provider.id === id ? { ...provider, ...patch } : provider));
-  }
   async function save() {
     props.setError(null);
-    const store: ProviderStore = { active: settings.active_provider, providers };
     try {
       await saveSettings(settings);
-      const saved = await saveProviders(store);
-      setProviders(saved.providers);
-      props.onSaved({ ...settings, active_provider: saved.active }, saved);
+      props.onSaved(settings, { active: settings.active_provider, providers });
       setNotice(t("settings.saved"));
     } catch (reason) {
       props.setError(String(reason));
@@ -1073,68 +1113,22 @@ function SettingsView(props: {
           </label>
         </div>
       </div>
-      <div className="cards" style={{ marginTop: 12 }}>
-        {providers.map((provider) => {
-          const secret = secrets.find((item) => item.id === provider.id);
-          const where = secret?.location === "keyring" ? t("settings.keyring") : secret?.location === "file" ? t("settings.file") : secret?.from_session ? t("settings.session") : secret?.from_env ? t("settings.env") : t("settings.none");
-          return (
-            <article key={provider.id} className="card">
-              <h3>{provider.name}</h3>
-              <div className="url">{provider.base_url}</div>
-              <div className="checks">
-                <label><input type="checkbox" checked={provider.enabled} onChange={(event) => update(provider.id, { enabled: event.target.checked })} />{t("settings.enabled")}</label>
-                <label><input type="radio" name="active" checked={settings.active_provider === provider.id} onChange={() => setSettings({ ...settings, active_provider: provider.id })} />{t("settings.active")}</label>
-                {provider.id === "xai" && <label><input type="checkbox" checked={provider.follow_latest} onChange={(event) => update(provider.id, { follow_latest: event.target.checked })} />{t("settings.latest")}</label>}
-                <span className="hint">{where}</span>
-              </div>
-              {provider.id === "xai" && <p className="hint">{t("settings.latestHint")}</p>}
-              <label className="field">{t("settings.model")}
-                <input list={`${provider.id}-models`} value={provider.model} onChange={(event) => update(provider.id, provider.id === "xai" ? { model: event.target.value, follow_latest: false } : { model: event.target.value })} />
-                <datalist id={`${provider.id}-models`}>{provider.model_hints.map((hint) => <option key={hint} value={hint} />)}</datalist>
-              </label>
-              <label className="field">{t("settings.apiKey")}
-                <input type="password" autoComplete="off" value={keys[provider.id] ?? ""} placeholder={provider.env_key} onChange={(event) => setKeys({ ...keys, [provider.id]: event.target.value })} />
-              </label>
-              <div className="row" style={{ marginTop: 8 }}>
-                <button type="button" onClick={() => void setSecret(provider.id, keys[provider.id] ?? "").then((location) => { setSecrets((current) => current.map((item) => item.id === provider.id ? { ...item, location } : item)); setKeys({ ...keys, [provider.id]: "" }); }).catch((reason: unknown) => props.setError(String(reason)))}>{t("settings.saveKey")}</button>
-                <button type="button" onClick={() => void clearSecret(provider.id).then(() => setSecrets((current) => current.map((item) => item.id === provider.id ? { ...item, location: null } : item))).catch((reason: unknown) => props.setError(String(reason)))}>{t("settings.clearKey")}</button>
-                <button type="button" onClick={() => void testProvider(provider.id).then((text) => setNotice(text || "ok")).catch((reason: unknown) => props.setError(String(reason)))}>{t("settings.test")}</button>
-              </div>
-            </article>
-          );
-        })}
-        <article className="card">
-          <h3>{t("settings.custom")}</h3>
-          <label className="field">{t("settings.id")}<input value={custom.id} onChange={(event) => setCustom({ ...custom, id: event.target.value })} /></label>
-          <label className="field">{t("settings.name")}<input value={custom.name} onChange={(event) => setCustom({ ...custom, name: event.target.value })} /></label>
-          <label className="field">{t("settings.format")}
-            <select value={custom.format} onChange={(event) => setCustom({ ...custom, format: event.target.value as Provider["format"] })}>
-              <option value="openai">{t("settings.openai")}</option>
-              <option value="anthropic">{t("settings.anthropic")}</option>
-              <option value="responses">{t("settings.responses")}</option>
-            </select>
-          </label>
-          <label className="field">{t("settings.baseUrl")}<input value={custom.base_url} onChange={(event) => setCustom({ ...custom, base_url: event.target.value })} /></label>
-          <label className="field">{t("settings.model")}<input value={custom.model} onChange={(event) => setCustom({ ...custom, model: event.target.value })} /></label>
-          <button type="button" className="primary" style={{ marginTop: 8 }} onClick={() => {
-            if (!custom.id || !custom.model) return;
-            const provider: Provider = {
-              id: custom.id, name: custom.name || custom.id, format: custom.format, base_url: custom.base_url, model: custom.model,
-              env_key: custom.env_key, env_key_fallbacks: [], context_window: custom.format === "anthropic" ? 200000 : 128000,
-              extra_headers: custom.format === "anthropic" ? { "anthropic-version": "2023-06-01" } : {},
-              env_http_headers: custom.format === "anthropic" ? { "x-api-key": custom.env_key } : {},
-              auth: custom.format === "anthropic" ? "x_api_key" : "bearer", enabled: true, temperature: null, max_tokens: 8192,
-              token_field: "max_tokens", builtin: false, model_hints: [custom.model], follow_latest: false,
-            };
-            setProviders((current) => [...current.filter((item) => item.id !== provider.id), provider]);
-            setSecrets((current) => current.some((item) => item.id === provider.id) ? current : [...current, { id: provider.id, location: null, from_env: false, from_session: false }]);
-          }}>{t("settings.add")}</button>
-        </article>
-      </div>
       <div className="row" style={{ marginTop: 12 }}>
         <button className="primary" onClick={() => void save()}>{t("settings.save")}</button>
         {notice && <span className="hint">{notice}</span>}
       </div>
+      <ProvidersPanel
+        t={t}
+        settings={settings}
+        providers={providers}
+        secrets={props.boot.secrets}
+        setError={props.setError}
+        onSaved={(nextSettings, store) => {
+          setSettings(nextSettings);
+          setProviders(store.providers);
+          props.onSaved(nextSettings, store);
+        }}
+      />
     </div>
   );
 }

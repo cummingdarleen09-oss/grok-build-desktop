@@ -14,9 +14,9 @@ use grok_desktop_core::{
     rename_session, render_mermaid, run_turn, save_automations, save_session, save_settings, tr,
 };
 use grok_providers::{
-    ProviderClient, ProviderConfig, ProviderStore, SecretLocation, SecretStore, Turn, apply_choice,
-    has_login_session, load_or_default_store, normalize_store, refresh_xai_models,
-    save_provider_store, sync_cli_config,
+    ProviderClient, ProviderConfig, ProviderFormat, ProviderStore, SecretLocation, SecretStore,
+    Turn, apply_choice, fetch_provider_models, has_login_session, load_or_default_store,
+    normalize_store, refresh_xai_models, save_provider_store, sync_cli_config,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -263,9 +263,13 @@ async fn send_prompt(
     session_id: String,
     text: String,
     plan: Option<bool>,
+    model: Option<String>,
 ) -> Result<Session, String> {
     let _turn = state.turn.lock().await;
     let mut session = load_session(&session_id)?;
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        session.model = model;
+    }
     let settings = load_settings();
     let store = load_or_default_store();
     let provider_id = if session.provider_id.is_empty() {
@@ -273,12 +277,15 @@ async fn send_prompt(
     } else {
         session.provider_id.clone()
     };
-    let provider = store
+    let mut provider = store
         .providers
         .iter()
         .find(|provider| provider.id == provider_id)
         .cloned()
         .ok_or_else(|| tr(&settings.lang, "no_provider"))?;
+    if !session.model.trim().is_empty() {
+        provider.model = session.model.clone();
+    }
     if !provider.enabled {
         return Err(tr(&settings.lang, "no_provider"));
     }
@@ -347,7 +354,11 @@ fn resolve_approval(state: State<'_, AppState>, id: String, approved: bool) -> R
 }
 
 #[tauri::command]
-async fn test_provider(state: State<'_, AppState>, id: String) -> Result<String, String> {
+async fn test_provider(
+    state: State<'_, AppState>,
+    id: String,
+    model: Option<String>,
+) -> Result<String, String> {
     let settings = load_settings();
     let store = load_or_default_store();
     let mut provider = store
@@ -355,6 +366,9 @@ async fn test_provider(state: State<'_, AppState>, id: String) -> Result<String,
         .into_iter()
         .find(|provider| provider.id == id)
         .ok_or_else(|| tr(&settings.lang, "no_provider"))?;
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        provider.model = model;
+    }
     let api_key = state
         .secrets
         .resolve(&provider, None)?
@@ -370,6 +384,52 @@ async fn test_provider(state: State<'_, AppState>, id: String) -> Result<String,
         .await
         .map_err(|error| error.to_string())?;
     Ok(text)
+}
+
+#[tauri::command]
+fn set_chat_model(id: String, provider_id: String, model: String) -> Result<Session, String> {
+    let mut session = load_session(&id)?;
+    session.provider_id = provider_id;
+    session.model = model;
+    save_session(&session)?;
+    Ok(session)
+}
+
+#[tauri::command]
+async fn fetch_models(
+    state: State<'_, AppState>,
+    id: String,
+    base_url: String,
+    format: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    let format = match format.as_str() {
+        "anthropic" => ProviderFormat::Anthropic,
+        "responses" => ProviderFormat::Responses,
+        _ => ProviderFormat::OpenAi,
+    };
+    let auth = if format == ProviderFormat::Anthropic {
+        grok_providers::AuthStyle::XApiKey
+    } else {
+        grok_providers::AuthStyle::Bearer
+    };
+    let key = if api_key.trim().is_empty() {
+        let store = load_or_default_store();
+        match store
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == id)
+        {
+            Some(provider) => state.secrets.resolve(&provider, None)?.unwrap_or_default(),
+            None => String::new(),
+        }
+    } else {
+        api_key
+    };
+    if key.trim().is_empty() {
+        return Err("missing api key".into());
+    }
+    fetch_provider_models(&base_url, auth, &key).await
 }
 
 #[tauri::command]
@@ -457,6 +517,8 @@ pub fn run() {
             cancel_prompt,
             resolve_approval,
             test_provider,
+            set_chat_model,
+            fetch_models,
             open_classic,
             render_diagram,
             project_media,
