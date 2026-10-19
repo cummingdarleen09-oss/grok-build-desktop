@@ -1,8 +1,14 @@
+# Build outputs. Keep these out of GitHub and Origin.
 /target
+target/
+node_modules/
+desktop/dist/
+dist/
 **/*.rs.bk
 .DS_Store
-node_modules
-desktop/dist
-# API keys. The desktop app writes these outside the repo, under $GROK_HOME.
+# API keys and local env. The desktop app writes keys under $GROK_HOME, not here.
 provider-secrets.json
 *.pem
+.env
+.env.*
+!.env.example
