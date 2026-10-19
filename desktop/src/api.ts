@@ -35,6 +35,34 @@ export interface Settings {
   active_provider: string | null;
   disabled_tools: string[];
   known_projects: string[];
+  theme: "light" | "dark";
+}
+
+export interface Automation {
+  id: string;
+  title: string;
+  prompt: string;
+  enabled: boolean;
+  cwd: string;
+  provider_id: string;
+  model: string;
+  frequency: "daily" | "weekly" | "weekdays" | "once";
+  time: string;
+  weekdays: number[];
+  last_run_at: string;
+  next_run_at: string;
+}
+
+export interface MediaFile {
+  path: string;
+  name: string;
+  kind: "image" | "video" | "audio" | "pdf" | string;
+  preview?: string;
+}
+
+export interface GitInfo {
+  current: string;
+  branches: string[];
 }
 
 export interface StoredTool {
@@ -100,8 +128,9 @@ export interface Bootstrap {
   sessions: SessionSummary[];
   extensions: ExtensionRecord[];
   secrets: SecretStatus[];
-  grok_binary: string | null;
   grok_home: string;
+  user_name: string;
+  automations: Automation[];
 }
 
 export type AgentEvent =
@@ -133,8 +162,9 @@ function seed(): Bootstrap {
     preset("openai", "OpenAI-compatible", "openai", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY", "bearer", "max_completion_tokens", 128000, ["gpt-4o", "gpt-4.1"], false, false),
     preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "x_api_key", "max_tokens", 200000, ["claude-sonnet-4-5", "claude-opus-4-5"], false, false),
   ];
-  const project = "/workspace/grok-build-desktop";
-  const notes = "/home/dev/notes";
+  const project = "/work/bohutongwxweb";
+  const ads = "/work/tansuo/adspower";
+  const notes = "/work/破限工具测试";
   const session: Session = {
     id: "demo",
     title: "Read the provider layer",
@@ -153,9 +183,9 @@ function seed(): Bootstrap {
         tool_calls: [
           {
             id: "t1",
-            name: "grep",
-            arguments: '{"pattern":"api.deepseek.com"}',
-            output: "crates/providers/grok-providers/src/presets.rs: base_url = https://api.deepseek.com",
+            name: "search_replace",
+            arguments: '{"path":"src/checkout.tsx","old":"return <Cart />","new":"return <Checkout />"}',
+            output: "updated src/checkout.tsx",
             is_error: false,
           },
         ],
@@ -163,7 +193,7 @@ function seed(): Bootstrap {
       msg("m3", "user", "Check the preset table specifically."),
       msg("m4", "assistant", "The preset row sets base_url to https://api.deepseek.com and format to openai."),
       msg("m5", "user", "Does the desktop app call that same client?"),
-      msg("m6", "assistant", "Yes. grok-desktop-core sends the transcript through grok-providers."),
+      msg("m6", "assistant", "Yes. grok-desktop-core sends the transcript through grok-providers.\n\n```mermaid\ngraph TD\n  UI-->Core\n  Core-->Providers\n```"),
     ],
   };
   const branch: Session = {
@@ -179,9 +209,19 @@ function seed(): Bootstrap {
     branched_at_index: 3,
     messages: session.messages.slice(0, 3).map((message) => ({ ...message, tool_calls: message.tool_calls.map((tool) => ({ ...tool })) })),
   };
+  const adsChat: Session = {
+    id: "ads",
+    title: "Investigate login timeout",
+    cwd: ads,
+    provider_id: "openai",
+    model: "gpt-4o",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    messages: [msg("a1", "user", "The login request hangs after the second redirect.")],
+  };
   const scratch: Session = {
     id: "notes",
-    title: "Meeting notes",
+    title: "对照权限提示文案",
     cwd: notes,
     provider_id: "kimi",
     model: "moonshot-v1-128k",
@@ -191,7 +231,27 @@ function seed(): Bootstrap {
   };
   memorySessions.set(session.id, session);
   memorySessions.set(branch.id, branch);
+  memorySessions.set(adsChat.id, adsChat);
   memorySessions.set(scratch.id, scratch);
+  const classic: SessionSummary = {
+    id: "classic-demo",
+    title: "TUI · 旧会话",
+    model: "grok-4",
+    provider_id: "classic",
+    cwd: project,
+    updated_at: new Date().toISOString(),
+    origin: "classic",
+  };
+  memorySessions.set("classic-demo", {
+    id: "classic-demo",
+    title: "TUI · 旧会话",
+    cwd: project,
+    provider_id: "classic",
+    model: "grok-4",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    messages: [msg("c1", "user", "Where is the config?"), msg("c2", "assistant", "It lives in config.toml.")],
+  });
   return {
     settings: {
       lang: "zh-CN",
@@ -199,10 +259,11 @@ function seed(): Bootstrap {
       cwd: project,
       active_provider: "xai",
       disabled_tools: [],
-      known_projects: [project, notes],
+      known_projects: [project, ads, notes],
+      theme: "light",
     },
     providers: { active: "xai", providers },
-    sessions: [summary(branch), summary(session), summary(scratch)],
+    sessions: [summary(branch), summary(session), summary(adsChat), summary(scratch), classic],
     extensions: [
       {
         kind: "tool",
@@ -217,8 +278,24 @@ function seed(): Bootstrap {
       from_env: false,
       from_session: provider.id === "xai",
     })),
-    grok_binary: null,
     grok_home: "~/.grok",
+    user_name: "dev",
+    automations: [
+      {
+        id: "auto-1",
+        title: "Weekday plan",
+        prompt: "Summarize the git diff and propose the next step.",
+        enabled: true,
+        cwd: project,
+        provider_id: "xai",
+        model: "grok-4.7",
+        frequency: "weekdays",
+        time: "09:00",
+        weekdays: [1, 2, 3, 4, 5],
+        last_run_at: "",
+        next_run_at: "",
+      },
+    ],
   };
 }
 
@@ -448,6 +525,7 @@ export async function sendPrompt(
   sessionId: string,
   text: string,
   onEvent: (event: AgentEvent) => void,
+  plan = false,
 ): Promise<Session> {
   if (!inTauri()) {
     onEvent({ type: "reasoning_delta", text: "Browser preview has no model connected. " });
@@ -478,7 +556,7 @@ export async function sendPrompt(
     if (payload.payload.session_id === sessionId) onEvent(payload.payload.event);
   });
   try {
-    return await invoke<Session>("send_prompt", { sessionId, text });
+    return await invoke<Session>("send_prompt", { sessionId, text, plan });
   } finally {
     unlisten();
   }
@@ -499,22 +577,46 @@ export async function testProvider(id: string): Promise<string> {
   return invoke("test_provider", { id });
 }
 
-export async function startTerminal(cols: number, rows: number): Promise<string> {
-  if (!inTauri()) throw new Error("The classic TUI runs inside the desktop app.");
-  return invoke("start_terminal", { cols, rows });
+export async function openClassic(id: string): Promise<Session> {
+  if (!inTauri()) return openChat(id);
+  return invoke("open_classic", { id });
 }
 
-export async function writeTerminal(data: string): Promise<void> {
-  await invoke("write_terminal", { data });
+export async function renderDiagram(source: string, dark: boolean): Promise<string | null> {
+  if (!inTauri()) return null;
+  try {
+    return await invoke<string>("render_diagram", { source, dark });
+  } catch {
+    return null;
+  }
 }
 
-export async function resizeTerminal(cols: number, rows: number): Promise<void> {
-  await invoke("resize_terminal", { cols, rows });
+export async function projectMedia(cwd: string): Promise<MediaFile[]> {
+  if (!inTauri()) {
+    return [
+      { path: `${cwd}/design/checkout.png`, name: "checkout.png", kind: "image", preview: "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="100%" height="100%" fill="#f4f4f5"/><rect x="24" y="28" width="272" height="124" rx="12" fill="#fff" stroke="#e4e4e7"/><text x="40" y="96" font-family="sans-serif" font-size="16" fill="#3f3f46">checkout.png</text></svg>') },
+      { path: `${cwd}/notes/spec.pdf`, name: "spec.pdf", kind: "pdf" },
+    ];
+  }
+  return invoke("project_media", { cwd });
 }
 
-export async function stopTerminal(): Promise<void> {
-  if (!inTauri()) return;
-  await invoke("stop_terminal");
+export async function loadAutomations(): Promise<Automation[]> {
+  if (!inTauri()) return structuredClone(memory.automations);
+  return invoke("load_automation_list");
+}
+
+export async function storeAutomations(list: Automation[]): Promise<Automation[]> {
+  if (!inTauri()) {
+    memory.automations = list;
+    return list;
+  }
+  return invoke("store_automations", { list });
+}
+
+export async function gitInfo(cwd: string): Promise<GitInfo> {
+  if (!inTauri()) return { current: "main", branches: ["main", "feat/checkout"] };
+  return invoke("git_info", { cwd });
 }
 
 export function desktopShell(): boolean {

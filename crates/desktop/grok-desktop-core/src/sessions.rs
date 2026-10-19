@@ -107,6 +107,15 @@ pub fn load_session(id: &str) -> Result<Session, String> {
     load_session_in(&grok_providers::grok_home(), id)
 }
 
+/// Read a classic TUI session as a desktop transcript.
+///
+/// The desktop app no longer embeds the TUI. Text chunks in `updates.jsonl`
+/// are shown read-only. Sessions without those chunks still open, with an
+/// empty message list, so the sidebar entry is not a dead end.
+pub fn load_classic_session(id: &str) -> Result<Session, String> {
+    load_classic_session_in(&grok_providers::grok_home(), id)
+}
+
 pub fn delete_session(id: &str) -> Result<(), String> {
     delete_session_in(&grok_providers::grok_home(), id)
 }
@@ -515,6 +524,148 @@ fn read_classic_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
     Ok(sessions)
 }
 
+pub fn load_classic_session_in(home: &Path, id: &str) -> Result<Session, String> {
+    validate_id(id)?;
+    let root = home.join("sessions");
+    let mut found = None;
+    if root.is_dir() {
+        for cwd_dir in std::fs::read_dir(&root).map_err(|error| error.to_string())? {
+            let cwd_dir = cwd_dir.map_err(|error| error.to_string())?;
+            let candidate = cwd_dir.path().join(id);
+            if candidate.join("summary.json").is_file() {
+                found = Some(candidate);
+                break;
+            }
+        }
+    }
+    let dir = found.ok_or_else(|| format!("classic session {id} was not found"))?;
+    let summary_text =
+        std::fs::read_to_string(dir.join("summary.json")).map_err(|error| error.to_string())?;
+    let summary: serde_json::Value =
+        serde_json::from_str(&summary_text).map_err(|error| error.to_string())?;
+    let cwd = summary
+        .pointer("/info/cwd")
+        .and_then(|item| item.as_str())
+        .map(normalize_project_path)
+        .unwrap_or_default();
+    let title = summary
+        .get("session_summary")
+        .and_then(|item| item.as_str())
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or(id)
+        .chars()
+        .take(80)
+        .collect::<String>();
+    let model = summary
+        .get("current_model_id")
+        .and_then(|item| item.as_str())
+        .unwrap_or("classic")
+        .to_string();
+    let updated_at = summary
+        .get("updated_at")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_string();
+    let messages = read_classic_messages(&dir.join("updates.jsonl"));
+    Ok(Session {
+        id: id.to_string(),
+        title,
+        cwd,
+        provider_id: "classic".into(),
+        model,
+        created_at: updated_at.clone(),
+        updated_at,
+        messages,
+        parent_session_id: summary
+            .get("parent_session_id")
+            .and_then(|item| item.as_str())
+            .map(str::to_string),
+        branched_from_message_id: None,
+        branched_at_index: None,
+    })
+}
+
+fn read_classic_messages(path: &Path) -> Vec<ChatMessage> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut messages: Vec<ChatMessage> = Vec::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let kind = value
+            .get("sessionUpdate")
+            .or_else(|| value.pointer("/update/sessionUpdate"))
+            .or_else(|| value.pointer("/params/update/sessionUpdate"))
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        let role = if kind.contains("user") {
+            "user"
+        } else if kind.contains("agent") || kind.contains("assistant") {
+            "assistant"
+        } else {
+            continue;
+        };
+        let text = first_text(&value);
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Some(last) = messages.last_mut() {
+            if last.role == role {
+                last.text.push('\n');
+                last.text.push_str(text.trim());
+                continue;
+            }
+        }
+        messages.push(ChatMessage {
+            id: format!("classic-{}", messages.len() + 1),
+            role: role.into(),
+            text: text.trim().to_string(),
+            reasoning: String::new(),
+            tool_calls: Vec::new(),
+        });
+    }
+    messages
+}
+
+fn first_text(value: &serde_json::Value) -> String {
+    let mut found = String::new();
+    collect_text(value, &mut found);
+    found
+}
+
+fn collect_text(value: &serde_json::Value, found: &mut String) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(|item| item.as_str()) {
+                if found.is_empty() {
+                    *found = text.to_string();
+                    return;
+                }
+            }
+            for (key, child) in map {
+                if key == "text" {
+                    continue;
+                }
+                collect_text(child, found);
+                if !found.is_empty() {
+                    return;
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_text(item, found);
+                if !found.is_empty() {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn summarize(session: &Session, origin: &str) -> SessionSummary {
     SessionSummary {
         id: session.id.clone(),
@@ -636,12 +787,7 @@ mod tests {
         session.id = "parent".into();
         session.messages = vec![
             message("m1", "user", "one", vec![]),
-            message(
-                "m2",
-                "assistant",
-                "two",
-                vec![tool("t-done", Some("hit"))],
-            ),
+            message("m2", "assistant", "two", vec![tool("t-done", Some("hit"))]),
             message("m3", "user", "three", vec![]),
             message(
                 "m4",
@@ -677,11 +823,7 @@ mod tests {
         save_session_in(home.path(), &beta).unwrap();
 
         let encoded = encode_project_dirname("/proj/alpha");
-        let classic_dir = home
-            .path()
-            .join("sessions")
-            .join(&encoded)
-            .join("classic1");
+        let classic_dir = home.path().join("sessions").join(&encoded).join("classic1");
         std::fs::create_dir_all(&classic_dir).unwrap();
         std::fs::write(
             classic_dir.join("summary.json"),
@@ -712,19 +854,45 @@ mod tests {
         let listed = list_sessions_in(home.path()).unwrap();
         assert!(!flat.exists());
         let groups = group_sessions(&["/proj/empty".into()], &listed);
-        let alpha_group = groups.iter().find(|group| group.path.ends_with("alpha")).unwrap();
-        let titles: Vec<_> = alpha_group.sessions.iter().map(|item| item.title.as_str()).collect();
+        let alpha_group = groups
+            .iter()
+            .find(|group| group.path.ends_with("alpha"))
+            .unwrap();
+        let titles: Vec<_> = alpha_group
+            .sessions
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect();
         assert_eq!(titles, vec!["TUI notes", "Alpha chat"]);
         assert_eq!(alpha_group.sessions[0].origin, "classic");
+        std::fs::write(
+            classic_dir.join("updates.jsonl"),
+            "{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"Where is the config?\"}}\n{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"It lives in config.toml.\"}}\n",
+        )
+        .unwrap();
+        let classic = load_classic_session_in(home.path(), "classic1").unwrap();
+        assert_eq!(classic.messages.len(), 2);
+        assert_eq!(classic.messages[0].role, "user");
+        assert!(classic.messages[1].text.contains("config.toml"));
+        assert_eq!(classic.provider_id, "classic");
         assert_eq!(alpha_group.sessions[1].origin, "desktop");
-        let beta_group = groups.iter().find(|group| group.path.ends_with("beta")).unwrap();
+        let beta_group = groups
+            .iter()
+            .find(|group| group.path.ends_with("beta"))
+            .unwrap();
         assert_eq!(beta_group.sessions.len(), 2);
-        assert!(groups.iter().any(|group| group.path.ends_with("empty") && group.sessions.is_empty()));
+        assert!(
+            groups
+                .iter()
+                .any(|group| group.path.ends_with("empty") && group.sessions.is_empty())
+        );
         let reloaded = load_session_in(home.path(), "legacy1").unwrap();
         assert_eq!(reloaded.title, "Moved");
-        assert!(find_desktop_file(home.path(), "alpha1")
-            .unwrap()
-            .starts_with(desktop_root(home.path()).join(encode_project_dirname("/proj/alpha"))));
+        assert!(
+            find_desktop_file(home.path(), "alpha1")
+                .unwrap()
+                .starts_with(desktop_root(home.path()).join(encode_project_dirname("/proj/alpha")))
+        );
     }
 
     #[test]
@@ -732,7 +900,8 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let parent = sample_parent();
         save_session_in(home.path(), &parent).unwrap();
-        let parent_bytes = std::fs::read(find_desktop_file(home.path(), "parent").unwrap()).unwrap();
+        let parent_bytes =
+            std::fs::read(find_desktop_file(home.path(), "parent").unwrap()).unwrap();
 
         let branched = {
             let loaded = load_session_in(home.path(), "parent").unwrap();
@@ -743,7 +912,11 @@ mod tests {
         let after = std::fs::read(find_desktop_file(home.path(), "parent").unwrap()).unwrap();
         assert_eq!(parent_bytes, after);
         assert_eq!(
-            branched.messages.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            branched
+                .messages
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["m1", "m2", "m3"]
         );
         assert_eq!(branched.cwd, parent.cwd);
@@ -767,13 +940,22 @@ mod tests {
         let parent = sample_parent();
         let branched = branch_from_session(&parent, "m4", true, "Mid").unwrap();
         assert_eq!(
-            branched.messages.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            branched
+                .messages
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["m1", "m2", "m3", "m4"]
         );
         let last = branched.messages.last().unwrap();
         assert_eq!(last.tool_calls.len(), 1);
         assert_eq!(last.tool_calls[0].id, "t-ok");
-        assert!(parent.messages[3].tool_calls.iter().any(|call| call.id == "t-open"));
+        assert!(
+            parent.messages[3]
+                .tool_calls
+                .iter()
+                .any(|call| call.id == "t-open")
+        );
 
         let turns = conversation_turns(&branched.messages);
         let tool_ids: Vec<_> = turns
@@ -781,14 +963,18 @@ mod tests {
             .filter_map(|turn| turn.tool_call_id.clone())
             .collect();
         assert_eq!(tool_ids, vec!["t-done".to_string(), "t-ok".to_string()]);
-        assert!(turns.iter().all(|turn| turn
-            .tool_calls
-            .iter()
-            .all(|call| call.id != "t-open")));
+        assert!(
+            turns
+                .iter()
+                .all(|turn| turn.tool_calls.iter().all(|call| call.id != "t-open"))
+        );
 
         let only_open = branch_from_session(
             &Session {
-                messages: vec![message("u", "user", "go", vec![]), message("a", "assistant", "", vec![tool("dangling", None)])],
+                messages: vec![
+                    message("u", "user", "go", vec![]),
+                    message("a", "assistant", "", vec![tool("dangling", None)]),
+                ],
                 ..parent.clone()
             },
             "a",
@@ -798,7 +984,11 @@ mod tests {
         .unwrap();
         assert_eq!(only_open.messages.len(), 1);
         assert_eq!(only_open.messages[0].id, "u");
-        assert!(conversation_turns(&only_open.messages).iter().all(|turn| turn.role == Role::User));
+        assert!(
+            conversation_turns(&only_open.messages)
+                .iter()
+                .all(|turn| turn.role == Role::User)
+        );
     }
 
     #[test]
@@ -806,7 +996,11 @@ mod tests {
         let parent = sample_parent();
         let branched = branch_from_session(&parent, "m3", false, "Edited").unwrap();
         assert_eq!(
-            branched.messages.iter().map(|item| item.text.as_str()).collect::<Vec<_>>(),
+            branched
+                .messages
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["one", "two"]
         );
         assert_eq!(branched.branched_at_index, Some(3));

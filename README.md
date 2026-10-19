@@ -9,23 +9,24 @@ Upstream baseline: git `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`. The monorepo 
 ## What this fork adds
 
 - **Grok Desktop** (`grok-desktop`): a Tauri 2 window (Windows, macOS, Linux) with chat sessions, file and shell tools, extension discovery, keyboard shortcuts, and settings in English and Chinese (zh-CN).
-- **Projects**: every desktop conversation belongs to a project folder (the working directory the agent uses). The sidebar groups chats by that folder. Add a folder with the native picker, switch projects, and create, rename, or delete conversations inside the selected one. New chats use the selected project. Sessions are stored at `$GROK_HOME/desktop-sessions/<encoded-cwd>/`, the same directory encoding the classic TUI uses under `~/.grok/sessions/<encoded-cwd>/`. Classic TUI sessions for that folder show up in the same group.
+- **Projects**: every desktop conversation belongs to a project folder (the working directory the agent uses). The sidebar lists those folders as repositories. Add a folder with the native picker, switch projects, and create, rename, or delete conversations inside the selected one. New chats use the selected project. Sessions are stored at `$GROK_HOME/desktop-sessions/<encoded-cwd>/`, the same directory encoding the CLI uses under `~/.grok/sessions/<encoded-cwd>/`. CLI sessions for that folder open read-only in the chat view.
 - **Branches**: "Branch from here" / "从这里分支" copies messages `1..N` into a new conversation (same project, provider, and model) and leaves the original untouched. Editing a past user message and resending starts a branch that continues from the edited text. A branch point in the middle of a tool-call round keeps finished tool results and drops calls that never received output, so the model sees exactly that prefix.
-- **Classic TUI inside the window**: the Terminal page starts the original `xai-grok-pager` binary on a PTY, so slash commands, plugins, hooks, MCP, sandboxing, and the rest of the upstream TUI stay available.
+- **Workbench**: the window follows the Cursor desktop layout (new chat, search, automations, customize, repository tree) and the workbench ideas in [grok-app](https://github.com/RongleCat/grok-app) (MIT, Copyright (c) 2026 RongleCat): sessions, a kanban of chats, project media preview, and scheduled automations. Light and dark themes. The classic TUI is not embedded; `xai-grok-pager` remains a separate release binary.
+- **MCP and diagrams**: stdio MCP servers from `config.toml` are listed and called during a desktop turn. Mermaid fences render with the vendored `mermaid-to-svg` engine. Plan mode withholds edits and shell commands.
 - **Providers** (`grok-providers`): xAI/Grok (Responses API, the default), OpenAI-compatible Chat Completions, and Anthropic Messages, with streaming and tool calls. Built-in presets for Grok, DeepSeek, Moonshot Kimi, generic OpenAI, and Claude. Custom providers of any of those formats. API keys go to the OS keychain when it is available, otherwise to a `0600` file. They are never written into git or into `config.toml`. A `grok login` session is reused for Grok.
 
 ## Architecture
 
 ```
 desktop/                  React + Vite UI (zh-CN / en)
-desktop/src-tauri/        Tauri 2 shell, PTY host for the classic TUI
+desktop/src-tauri/        Tauri 2 shell (no embedded TUI)
 crates/desktop/grok-desktop-core/   sessions, tools, agent loop
 crates/providers/grok-providers/    translation, SSE, presets, secrets, CLI merge
 crates/codegen/xai-grok-shell/      upstream agent; loads providers.toml + env presets
 crates/codegen/xai-grok-pager-bin/  upstream CLI binary (xai-grok-pager)
 ```
 
-The desktop agent does not link the full `xai-grok-shell` runtime. It calls `grok-providers` for model traffic and a small tool set (`read_file`, `write_file`, `search_replace`, `grep`, `list_dir`, `run_terminal`). The original binary is still the way to use every upstream capability. Provider presets are merged in memory when the CLI loads config, so existing `[model.*]` and `[model_providers.*]` entries in your config win.
+The desktop agent does not link the full `xai-grok-shell` runtime, and it does not spawn `grok agent stdio`. Driving the CLI the way grok-app does would pick up hooks, the sandbox profile, HTTP MCP, and voice, but it would also drop the third-party transcript this app branches and the provider loop in `grok-providers`. Desktop chats therefore keep that loop, add stdio MCP tools, and leave hooks, voice, sandbox policy, and HTTP MCP on the standalone CLI. Provider presets are merged in memory when the CLI loads config, so existing `[model.*]` and `[model_providers.*]` entries in your config win.
 
 ## Requirements
 
@@ -58,7 +59,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Windows
 
-Install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (already present on Windows 11), the Visual Studio C++ build tools (Desktop development with C++), Rust via rustup, and Node.js 22. Then use the same `cargo build -p grok-desktop` command from a Developer PowerShell. The classic TUI page uses a ConPTY host through `portable-pty`.
+Install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (already present on Windows 11), the Visual Studio C++ build tools (Desktop development with C++), Rust via rustup, and Node.js 22. Then use the same `cargo build -p grok-desktop` command from a Developer PowerShell.
 
 ## Build and run the desktop app
 
@@ -103,7 +104,7 @@ cargo build -p xai-grok-pager-bin
 ./target/debug/xai-grok-pager
 ```
 
-The desktop Terminal page looks for `GROK_BIN`, then `grok` / `xai-grok-pager` on `PATH`, then `target/debug/xai-grok-pager` and `target/release/xai-grok-pager` walking up from the current directory.
+The desktop window does not embed that TUI. Run the binary above, or the release asset named `grok-<target>`, when you want the classic pager.
 
 ## Downloads
 
@@ -116,7 +117,7 @@ Pushing a tag named `v*` (for example `v0.1.0`) runs [`.github/workflows/release
 | macOS Intel | `.dmg` (cross-built on the Apple Silicon runner) | `grok-x86_64-apple-darwin` |
 | Linux x64 | `.deb` and `.AppImage` | `grok-x86_64-unknown-linux-gnu` |
 
-Each `grok-<target>` file is the `xai-grok-pager` binary. Rename it to `grok` or `xai-grok-pager`, put it on `PATH`, or set `GROK_BIN`. The desktop app also looks next to its own executable for those names. The CLI build needs `protoc` 29.3; the workflow installs it. Builds are unsigned until the secrets below are set.
+Each `grok-<target>` file is the `xai-grok-pager` binary. Rename it to `grok` or `xai-grok-pager` and put it on `PATH`. The CLI build needs `protoc` 29.3; the workflow installs it. Builds are unsigned until the secrets below are set.
 
 Branch pushes and pull requests still run [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml), which tests providers and compiles the desktop binary without producing installers.
 
@@ -220,7 +221,7 @@ export DEEPSEEK_MODEL=deepseek-chat          # optional
 export DEEPSEEK_BASE_URL=https://api.deepseek.com   # optional
 ```
 
-In the desktop app: Settings → enable DeepSeek → mark it active → paste the key → Save. The key is stored in the keychain or the `0600` file, and the classic TUI process receives it as `DEEPSEEK_API_KEY`.
+In the desktop app: Settings → enable DeepSeek → mark it active → paste the key → Save. The key is stored in the keychain or the `0600` file. Running the standalone CLI in the same environment still reads `DEEPSEEK_API_KEY`.
 
 ### Moonshot Kimi
 
@@ -293,4 +294,4 @@ cargo build -p xai-grok-pager-bin
 
 ## What is not a second copy of the TUI
 
-The desktop chat is a new agent loop with the six tools listed above. It does not reimplement upstream mermaid rendering, voice, the sandbox policy engine, ACP, hooks, or the full MCP client. Open the Terminal page (or run `xai-grok-pager`) for those. The desktop loop runs one turn at a time and asks before writes and shell commands unless Settings is set to auto. Model name defaults are suggestions; change them if your account uses a different id.
+The desktop chat is a new agent loop with the six tools listed above, plus stdio MCP tools and Mermaid diagrams. It does not embed the classic TUI. Voice input, the sandbox policy engine, ACP, hooks, and HTTP MCP stay on `xai-grok-pager`. The desktop loop runs one turn at a time and asks before writes and shell commands unless Settings is set to auto. Model name defaults are suggestions; change them if your account uses a different id. Scheduled automations fire while the window is open; they do not run after you quit.

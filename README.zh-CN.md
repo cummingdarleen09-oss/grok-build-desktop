@@ -9,23 +9,24 @@ English: [README.md](README.md).
 ## 这个分支增加了什么
 
 - **Grok Desktop**（`grok-desktop`）：基于 Tauri 2 的窗口（Windows、macOS、Linux）。包含会话、文件和终端工具、扩展发现、快捷键，以及中文（zh-CN）和英文设置界面。
-- **项目**：每段桌面对话都属于一个项目文件夹（代理的工作目录）。侧栏按文件夹分组。可以用系统文件夹选择器添加项目、切换项目，并在当前项目里新建、重命名或删除对话。新对话使用当前选中的项目。会话保存在 `$GROK_HOME/desktop-sessions/<编码后的工作目录>/`，目录名编码与经典 TUI 的 `~/.grok/sessions/<编码后的工作目录>/` 相同。同一文件夹下的经典 TUI 会话会出现在同一组里。
+- **项目**：每段桌面对话都属于一个项目文件夹（代理的工作目录）。侧栏把这些文件夹列为仓库。可以用系统文件夹选择器添加项目、切换项目，并在当前项目里新建、重命名或删除对话。新对话使用当前选中的项目。会话保存在 `$GROK_HOME/desktop-sessions/<编码后的工作目录>/`，目录名编码与 CLI 的 `~/.grok/sessions/<编码后的工作目录>/` 相同。同一文件夹下的 CLI 会话会以只读方式在对话里打开。
 - **分支**：在任意一条消息上选择「从这里分支」，会把第 1 到第 N 条消息复制到一段新对话（同一项目、同一供应商和模型），原对话保持不变。编辑过去的用户消息并重发，会从那条消息之前分出新分支，再用修改后的文本继续。如果分支点落在一轮工具调用的中间，已完成的工具结果会保留，没有输出的调用会被丢掉，模型收到的就是这段截断后的历史。
-- **窗口里的经典 TUI**：终端页用 PTY 启动原来的 `xai-grok-pager`。斜杠命令、插件、hooks、MCP、沙箱，以及上游 TUI 的其余能力都还在。
+- **工作台**：窗口采用 Cursor 桌面的布局（新对话、搜索、自动化、自定义、仓库树），并吸收了 [grok-app](https://github.com/RongleCat/grok-app)（MIT，Copyright (c) 2026 RongleCat）的工作台想法：会话、对话看板、项目媒体预览、定时自动化。浅色和深色主题。窗口里不再嵌入经典终端；`xai-grok-pager` 仍是单独发布的二进制。
+- **MCP 与图**：`config.toml` 里的 stdio MCP 会在桌面对话中被列出并调用。Mermaid 代码块用仓库里的 `mermaid-to-svg` 渲染。计划模式不会改文件，也不会执行命令。
 - **供应商**（`grok-providers`）：xAI/Grok（Responses API，默认供应商）、OpenAI 兼容的 Chat Completions，以及 Anthropic Messages。支持流式输出和工具调用。内置 Grok、DeepSeek、月之暗面 Kimi、通用 OpenAI、Claude。这三种协议都可以添加自定义供应商。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。Grok 会复用 `grok login` 的登录会话。
 
 ## 结构
 
 ```
 desktop/                  React + Vite 界面（zh-CN / en）
-desktop/src-tauri/        Tauri 2 外壳，以及经典 TUI 的 PTY
+desktop/src-tauri/        Tauri 2 外壳（不嵌入终端）
 crates/desktop/grok-desktop-core/   会话、工具、代理循环
 crates/providers/grok-providers/    请求翻译、SSE、预设、密钥、CLI 合并
 crates/codegen/xai-grok-shell/      上游代理；读取 providers.toml 和环境变量预设
 crates/codegen/xai-grok-pager-bin/  上游 CLI（二进制名 xai-grok-pager）
 ```
 
-桌面代理没有链接完整的 `xai-grok-shell`。模型请求走 `grok-providers`，工具只有 `read_file`、`write_file`、`search_replace`、`grep`、`list_dir`、`run_terminal`。要用上游的全部能力，请运行原来的二进制。CLI 加载配置时在内存里合并供应商预设；你在配置里已经写过的 `[model.*]` 和 `[model_providers.*]` 不会被覆盖。
+桌面代理没有链接完整的 `xai-grok-shell`，也不会启动 `grok agent stdio`。如果像 grok-app 那样完全交给 CLI，就能用上钩子、沙箱、HTTP MCP 和语音，但会丢掉这套可分支的第三方会话和 `grok-providers` 的供应商循环。所以桌面对话保留这条循环，并加上 stdio MCP；钩子、语音、沙箱策略和 HTTP MCP 仍在独立 CLI 里。CLI 加载配置时在内存里合并供应商预设；你在配置里已经写过的 `[model.*]` 和 `[model_providers.*]` 不会被覆盖。
 
 ## 环境
 
@@ -59,7 +60,7 @@ Node 22 从 <https://nodejs.org> 安装。
 
 ### Windows
 
-安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 通常已自带）、Visual Studio 的“使用 C++ 的桌面开发”生成工具、rustup 提供的 Rust，以及 Node.js 22。在 Developer PowerShell 里同样执行 `cargo build -p grok-desktop`。经典 TUI 页通过 `portable-pty` 使用 ConPTY。
+安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 通常已自带）、Visual Studio 的“使用 C++ 的桌面开发”生成工具、rustup 提供的 Rust，以及 Node.js 22。在 Developer PowerShell 里同样执行 `cargo build -p grok-desktop`。
 
 ## 编译并运行桌面应用
 
@@ -104,7 +105,7 @@ cargo build -p xai-grok-pager-bin
 ./target/debug/xai-grok-pager
 ```
 
-桌面里的终端页按这个顺序找二进制：`GROK_BIN`，然后是 `PATH` 上的 `grok` 或 `xai-grok-pager`，再从当前目录向上找 `target/debug/xai-grok-pager` 和 `target/release/xai-grok-pager`。
+桌面窗口不再嵌入这个 TUI。需要经典 pager 时，运行上面的二进制，或发布资源里的 `grok-<target>`。
 
 ## 下载
 
@@ -117,7 +118,7 @@ cargo build -p xai-grok-pager-bin
 | macOS Intel | `.dmg`（在 Apple Silicon runner 上交叉编译） | `grok-x86_64-apple-darwin` |
 | Linux x64 | `.deb` 和 `.AppImage` | `grok-x86_64-unknown-linux-gnu` |
 
-每个 `grok-<target>` 文件就是 `xai-grok-pager`。把它改名为 `grok` 或 `xai-grok-pager` 放进 `PATH`，或设置 `GROK_BIN`。桌面应用也会在自己的可执行文件旁边查找这些名字。CLI 构建需要 `protoc` 29.3，工作流会安装它。在配置下面的密钥之前，构建结果是未签名的。
+每个 `grok-<target>` 文件就是 `xai-grok-pager`。把它改名为 `grok` 或 `xai-grok-pager` 放进 `PATH`。CLI 构建需要 `protoc` 29.3，工作流会安装它。在配置下面的密钥之前，构建结果是未签名的。
 
 分支推送和 pull request 仍然运行 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml)：测试供应商并编译桌面二进制，不制作安装包。
 
@@ -221,7 +222,7 @@ export DEEPSEEK_MODEL=deepseek-chat          # 可选
 export DEEPSEEK_BASE_URL=https://api.deepseek.com   # 可选
 ```
 
-在桌面应用里：设置 → 启用 DeepSeek → 设为当前供应商 → 粘贴密钥 → 保存。密钥进入钥匙串或 `0600` 文件。打开经典 TUI 时，进程会拿到环境变量 `DEEPSEEK_API_KEY`。
+在桌面应用里：设置 → 启用 DeepSeek → 设为当前供应商 → 粘贴密钥 → 保存。密钥进入钥匙串或 `0600` 文件。同一环境下单独运行 CLI 时，进程仍会读取 `DEEPSEEK_API_KEY`。
 
 ### 月之暗面 Kimi
 
@@ -294,4 +295,4 @@ cargo build -p xai-grok-pager-bin
 
 ## 还没有做成第二份 TUI 的部分
 
-桌面聊天是一条新的代理循环，工具就是上面那六个。它没有重做上游的 mermaid、语音、沙箱策略、ACP、hooks，也没有完整的 MCP 客户端。这些请打开终端页，或直接运行 `xai-grok-pager`。桌面循环一次只跑一轮对话；除非在设置里改成自动，否则写文件和执行命令前会先询问。模型名的默认值只是建议，账号所用的 id 不同时请改掉。
+桌面聊天是一条新的代理循环，工具是上面那六个，再加上 stdio MCP 和 Mermaid 图。窗口里不再嵌入经典 TUI。语音、沙箱策略、ACP、hooks 和 HTTP MCP 仍在 `xai-grok-pager` 里。桌面循环一次只跑一轮对话；除非在设置里改成自动，否则写文件和执行命令前会先询问。模型名的默认值只是建议，账号所用的 id 不同时请改掉。定时自动化只在窗口开着的时候触发，退出之后不会在后台跑。

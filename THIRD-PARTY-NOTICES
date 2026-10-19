@@ -1,5 +1,18 @@
 THIRD-PARTY NOTICES
 ================================================================================
+
+Workbench layout, automation records, and session/project/media ideas in the
+desktop UI are adapted from grok-app:
+
+  Source:    https://github.com/RongleCat/grok-app
+  License:   MIT
+  Copyright: Copyright (c) 2026 RongleCat
+
+The MIT license text is in Part II. This project does not vendor the grok-app
+source tree; the desktop agent loop, providers, and transcripts are original
+to this fork.
+
+================================================================================
 PART I — PER-PACKAGE ENTRIES
 ================================================================================
 
