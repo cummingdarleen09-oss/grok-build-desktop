@@ -1,3 +1,8 @@
 /target
 **/*.rs.bk
 .DS_Store
+node_modules
+desktop/dist
+# API keys. The desktop app writes these outside the repo, under $GROK_HOME.
+provider-secrets.json
+*.pem

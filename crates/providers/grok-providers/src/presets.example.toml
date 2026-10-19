@@ -1,0 +1,80 @@
+# Example third-party providers. Copy to ~/.grok/providers.toml
+# (or $GROK_HOME/providers.toml). Do not put API keys in this file.
+# Set DEEPSEEK_API_KEY, MOONSHOT_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
+# or a custom env_key, then run `grok-providers sync`.
+
+active = "deepseek"
+
+[[providers]]
+id = "deepseek"
+name = "DeepSeek"
+format = "openai"
+base_url = "https://api.deepseek.com"
+model = "deepseek-chat"
+env_key = "DEEPSEEK_API_KEY"
+context_window = 128000
+auth = "bearer"
+enabled = true
+max_tokens = 8192
+token_field = "max_tokens"
+builtin = true
+model_hints = ["deepseek-chat", "deepseek-reasoner"]
+
+[[providers]]
+id = "kimi"
+name = "Moonshot Kimi"
+format = "openai"
+base_url = "https://api.moonshot.cn/v1"
+model = "moonshot-v1-128k"
+env_key = "MOONSHOT_API_KEY"
+env_key_fallbacks = ["KIMI_API_KEY"]
+context_window = 128000
+auth = "bearer"
+enabled = false
+max_tokens = 8192
+token_field = "max_tokens"
+builtin = true
+
+[[providers]]
+id = "openai"
+name = "OpenAI-compatible"
+format = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o"
+env_key = "OPENAI_API_KEY"
+context_window = 128000
+auth = "bearer"
+enabled = false
+max_tokens = 8192
+token_field = "max_completion_tokens"
+builtin = true
+
+[[providers]]
+id = "anthropic"
+name = "Anthropic Claude"
+format = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+model = "claude-sonnet-4-5"
+env_key = "ANTHROPIC_API_KEY"
+context_window = 200000
+auth = "x_api_key"
+enabled = false
+max_tokens = 8192
+token_field = "max_tokens"
+builtin = true
+extra_headers = { "anthropic-version" = "2023-06-01" }
+env_http_headers = { "x-api-key" = "ANTHROPIC_API_KEY" }
+
+# [[providers]]
+# id = "my-proxy"
+# name = "Lab proxy"
+# format = "openai"
+# base_url = "http://127.0.0.1:4000/v1"
+# model = "local-model"
+# env_key = "MY_PROXY_API_KEY"
+# context_window = 32000
+# auth = "bearer"
+# enabled = false
+# max_tokens = 4096
+# token_field = "max_tokens"
+# builtin = false

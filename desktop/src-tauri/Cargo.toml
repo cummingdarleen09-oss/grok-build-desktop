@@ -1,0 +1,31 @@
+[package]
+name = "grok-desktop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Desktop shell for grok-build with third-party model providers"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "=2.5.6", features = [] }
+
+[dependencies]
+base64 = { workspace = true }
+grok-desktop-core = { workspace = true }
+grok-providers = { workspace = true, features = ["keyring"] }
+portable-pty = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Pinned to the tauri 2.10.3 release set. Newer patch versions of
+# tauri-runtime, wry, and tauri-macros do not compile together.
+tauri = { version = "=2.10.3", features = [] }
+tauri-runtime = { version = "=2.10.1" }
+tauri-runtime-wry = { version = "=2.10.1" }
+tauri-macros = { version = "=2.5.5" }
+tauri-codegen = { version = "=2.5.5" }
+tauri-utils = { version = "=2.8.3" }
+wry = { version = "=0.54.0" }
+tao = { version = "=0.34.5" }
+muda = { version = "=0.17.2" }
+tokio = { workspace = true }
+which = { workspace = true }

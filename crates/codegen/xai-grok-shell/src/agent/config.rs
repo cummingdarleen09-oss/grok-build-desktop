@@ -1401,7 +1401,12 @@ impl Config {
         Ok((config, unrecognized_keys))
     }
     pub fn new_from_toml_cfg(raw_config: &toml::Value) -> Result<Self, String> {
-        let raw_config = &xai_grok_login::expand_auth_alias(raw_config);
+        // Third-party presets (DeepSeek, Kimi, OpenAI-compatible, Claude) are
+        // merged in memory from providers.toml and API-key env vars. Existing
+        // user tables win. GROK_DISABLE_PROVIDER_PRESETS=1 skips this.
+        let mut with_presets = raw_config.clone();
+        grok_providers::merge_configured_providers(&mut with_presets);
+        let raw_config = &xai_grok_login::expand_auth_alias(&with_presets);
         let super::config_model_override_parse::ParsedModelOverrides {
             models: config_models,
             warnings: config_warnings,
