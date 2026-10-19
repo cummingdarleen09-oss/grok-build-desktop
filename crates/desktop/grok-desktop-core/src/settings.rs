@@ -17,6 +17,9 @@ pub struct DesktopSettings {
     pub active_provider: Option<String>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,
+    /// Project folders the user has opened, even when they have no conversations yet.
+    #[serde(default)]
+    pub known_projects: Vec<String>,
 }
 
 fn default_lang() -> String {
@@ -42,6 +45,7 @@ impl Default for DesktopSettings {
                 .to_string(),
             active_provider: default_active_provider(),
             disabled_tools: Vec::new(),
+            known_projects: Vec::new(),
         }
     }
 }

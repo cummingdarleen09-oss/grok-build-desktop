@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures_util::StreamExt;
-use grok_providers::{ProviderClient, ProviderConfig, ProviderEvent, Role, StopReason, Turn};
+use grok_providers::{ProviderClient, ProviderConfig, ProviderEvent, StopReason, Turn};
 use serde::Serialize;
 
-use crate::sessions::{ChatMessage, Session, StoredTool, touch};
+use crate::sessions::{ChatMessage, Session, StoredTool, conversation_turns, touch};
 use crate::text::tr;
 use crate::tools::{ToolOutput, execute_tool, needs_approval, tool_defs};
 
@@ -312,39 +312,7 @@ where
 
 fn transcript(session: &Session, lang: &str) -> Vec<Turn> {
     let mut turns = vec![Turn::system(system_prompt(&session.cwd, lang))];
-    for message in &session.messages {
-        if message.role == "user" {
-            turns.push(Turn::user(&message.text));
-            continue;
-        }
-        if message.role != "assistant" {
-            continue;
-        }
-        turns.push(Turn {
-            role: Role::Assistant,
-            text: message.text.clone(),
-            reasoning: if message.reasoning.is_empty() {
-                None
-            } else {
-                Some(message.reasoning.clone())
-            },
-            tool_calls: message
-                .tool_calls
-                .iter()
-                .map(|call| grok_providers::ToolCall {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                })
-                .collect(),
-            tool_call_id: None,
-        });
-        for call in &message.tool_calls {
-            if let Some(output) = &call.output {
-                turns.push(Turn::tool(&call.id, output));
-            }
-        }
-    }
+    turns.extend(conversation_turns(&session.messages));
     turns
 }
 

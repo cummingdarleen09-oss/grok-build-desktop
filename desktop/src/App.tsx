@@ -9,14 +9,18 @@ import {
   type Provider,
   type ProviderStore,
   type Session,
+  type SessionSummary,
   type Settings,
+  branchChat,
   cancelPrompt,
   clearSecret,
   createChat,
   desktopShell,
   loadBootstrap,
   openChat,
+  pickProjectFolder,
   removeChat,
+  renameChat,
   resolveApproval,
   resizeTerminal,
   saveProviders,
@@ -28,7 +32,7 @@ import {
   testProvider,
   writeTerminal,
 } from "./api";
-import { desktopShortcuts, translate, tuiShortcuts, type Key, type Lang } from "./i18n";
+import { branchBanner, desktopShortcuts, translate, tuiShortcuts, type Key, type Lang } from "./i18n";
 
 type Page = "chat" | "extensions" | "terminal" | "shortcuts" | "settings";
 
@@ -38,6 +42,8 @@ export function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [page, setPage] = useState<Page>("chat");
   const [session, setSession] = useState<Session | null>(null);
+  const [classic, setClassic] = useState<SessionSummary | null>(null);
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,11 +53,14 @@ export function App() {
   async function refresh(openId?: string) {
     const next = await loadBootstrap();
     setBoot(next);
-    const id = openId ?? session?.id;
-    if (id && next.sessions.some((item) => item.id === id)) {
+    const preview = !desktopShell() ? "branch-demo" : undefined;
+    const id = openId ?? session?.id ?? preview;
+    if (id && next.sessions.some((item) => item.id === id && item.origin !== "classic")) {
+      setClassic(null);
       setSession(await openChat(id));
-    } else if (!session && next.sessions[0] && !desktopShell()) {
-      setSession(await openChat(next.sessions[0].id));
+    } else if (!session && next.sessions.find((item) => item.origin !== "classic") && !desktopShell()) {
+      const fallback = next.sessions.find((item) => item.origin !== "classic");
+      if (fallback) setSession(await openChat(fallback.id));
     }
   }
 
@@ -90,9 +99,60 @@ export function App() {
       return;
     }
     const created = await createChat(boot.settings.cwd, provider.id, provider.model, lang);
+    setClassic(null);
     setSession(created);
     setPage("chat");
     await refresh(created.id);
+  }
+
+  async function addProject() {
+    if (!boot) return;
+    const picked = await pickProjectFolder();
+    if (!picked) return;
+    const path = projectPath(picked);
+    const known = boot.settings.known_projects.some((item) => projectPath(item) === path)
+      ? boot.settings.known_projects
+      : [...boot.settings.known_projects, path];
+    const settings = { ...boot.settings, cwd: path, known_projects: known };
+    await saveSettings(settings);
+    setBoot({ ...boot, settings });
+    setClassic(null);
+    setSession(null);
+    setPage("chat");
+  }
+
+  async function selectProject(path: string) {
+    if (!boot) return;
+    const settings = { ...boot.settings, cwd: path };
+    await saveSettings(settings);
+    setBoot({ ...boot, settings });
+    setPage("chat");
+    const first = boot.sessions.find((item) => projectPath(item.cwd) === projectPath(path) && item.origin !== "classic");
+    setClassic(null);
+    setSession(first ? await openChat(first.id) : null);
+  }
+
+  async function openListed(item: SessionSummary) {
+    if (!boot) return;
+    const settings = { ...boot.settings, cwd: projectPath(item.cwd) };
+    await saveSettings(settings);
+    setBoot({ ...boot, settings });
+    setPage("chat");
+    setFocusMessageId(null);
+    if (item.origin === "classic") {
+      setSession(null);
+      setClassic(item);
+      return;
+    }
+    setClassic(null);
+    setSession(await openChat(item.id));
+  }
+
+  async function openParent(id: string, messageId?: string | null) {
+    setClassic(null);
+    setFocusMessageId(messageId ?? null);
+    setSession(await openChat(id));
+    setPage("chat");
   }
 
   async function setLang(next: Lang) {
@@ -123,20 +183,31 @@ export function App() {
           <Nav page="shortcuts" current={page} setPage={setPage} label={t("nav.shortcuts")} />
           <Nav page="settings" current={page} setPage={setPage} label={t("nav.settings")} />
         </nav>
+        <button className="ghost" onClick={() => void addProject()}>{t("project.add")}</button>
         <button className="primary" onClick={() => void newChat()}>{t("chat.new")}</button>
         <div className="session-list">
-          {boot.sessions.map((item) => (
-            <button
-              key={item.id}
-              className={session?.id === item.id ? "active" : ""}
-              onClick={() => {
-                setPage("chat");
-                void openChat(item.id).then(setSession).catch((reason: unknown) => setError(String(reason)));
-              }}
-            >
-              {item.title}
-              <em>{item.model}</em>
-            </button>
+          {projectGroups(boot).map((group) => (
+            <section key={group.path} className={projectPath(boot.settings.cwd) === group.path ? "project active" : "project"}>
+              <button className="project-head" onClick={() => void selectProject(group.path).catch((reason: unknown) => setError(String(reason)))}>
+                <strong>{projectLeaf(group.path)}</strong>
+                <span title={group.path}>{group.path}</span>
+              </button>
+              {group.sessions.length === 0 && <p className="project-empty">{t("project.empty")}</p>}
+              {group.sessions.map((item) => (
+                <ConversationRow
+                  key={`${item.origin}-${item.id}`}
+                  item={item}
+                  active={session?.id === item.id || classic?.id === item.id}
+                  renameLabel={t("chat.rename")}
+                  onOpen={() => void openListed(item).catch((reason: unknown) => setError(String(reason)))}
+                  onRename={async (title) => {
+                    const next = await renameChat(item.id, title);
+                    setSession(next);
+                    await refresh(next.id);
+                  }}
+                />
+              ))}
+            </section>
           ))}
         </div>
       </aside>
@@ -152,14 +223,44 @@ export function App() {
           </div>
         </header>
         {error && <div className="banner" onClick={() => setError(null)}>{error}</div>}
-        {page === "chat" && (
+        {page === "chat" && classic && (
+          <div className="content">
+            <div className="empty">
+              <h1>{classic.title}</h1>
+              <p>{t("project.classicBody")}</p>
+              <button className="primary" onClick={() => setPage("terminal")}>{t("project.classic")}</button>
+            </div>
+          </div>
+        )}
+        {page === "chat" && !classic && (
           <Chat
             t={t}
+            lang={lang}
             boot={boot}
             session={session}
             busy={busy}
+            focusMessageId={focusMessageId}
             setBusy={setBusy}
             setError={setError}
+            onOpen={(id, messageId) => void openParent(id, messageId).catch((reason: unknown) => setError(String(reason)))}
+            onBranch={async (messageId, includeMessage, replacement) => {
+              if (!session) return;
+              const created = await branchChat(session.id, messageId, includeMessage, lang);
+              setSession(created);
+              setFocusMessageId(null);
+              if (replacement?.trim()) {
+                setBusy(true);
+                try {
+                  const next = await sendPrompt(created.id, replacement.trim(), () => undefined);
+                  setSession(next);
+                  await refresh(next.id);
+                } finally {
+                  setBusy(false);
+                }
+              } else {
+                await refresh(created.id);
+              }
+            }}
             onSession={async (next) => {
               setSession(next);
               const listed = await loadBootstrap();
@@ -198,6 +299,71 @@ function pageTitle(page: Page): Key {
   return "nav.chat";
 }
 
+function projectPath(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  return trimmed || path.trim();
+}
+
+function projectLeaf(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function projectGroups(boot: Bootstrap): { path: string; sessions: SessionSummary[] }[] {
+  const paths = new Map<string, string>();
+  const add = (path: string) => {
+    const key = projectPath(path);
+    if (key) paths.set(key, key);
+  };
+  add(boot.settings.cwd);
+  for (const path of boot.settings.known_projects ?? []) add(path);
+  for (const session of boot.sessions) add(session.cwd);
+  return [...paths.values()]
+    .sort((left, right) => projectLeaf(left).localeCompare(projectLeaf(right)))
+    .map((path) => ({
+      path,
+      sessions: boot.sessions
+        .filter((session) => projectPath(session.cwd) === path)
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
+    }));
+}
+
+function parentTitle(boot: Bootstrap, id: string): string {
+  return boot.sessions.find((session) => session.id === id)?.title ?? id;
+}
+
+function ConversationRow(props: {
+  item: SessionSummary;
+  active: boolean;
+  renameLabel: string;
+  onOpen: () => void;
+  onRename: (title: string) => Promise<void>;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [title, setTitle] = useState(props.item.title);
+  return (
+    <div className={props.active ? "conversation active" : "conversation"}>
+      {renaming ? (
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          setRenaming(false);
+          void props.onRename(title);
+        }}>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
+        </form>
+      ) : (
+        <button onClick={props.onOpen}>
+          <span>{props.item.origin === "classic" ? "TUI · " : props.item.parent_session_id ? "↳ " : ""}{props.item.title}</span>
+          <em>{props.item.origin === "classic" ? "classic" : props.item.model}</em>
+        </button>
+      )}
+      {props.item.origin !== "classic" && !renaming && (
+        <button className="icon" title={props.renameLabel} onClick={() => { setTitle(props.item.title); setRenaming(true); }}>✎</button>
+      )}
+    </div>
+  );
+}
+
 function Nav(props: { page: Page; current: Page; setPage: (page: Page) => void; label: string }) {
   return (
     <button className={props.current === props.page ? "active" : ""} onClick={() => props.setPage(props.page)}>
@@ -208,16 +374,22 @@ function Nav(props: { page: Page; current: Page; setPage: (page: Page) => void; 
 
 function Chat(props: {
   t: (key: Key) => string;
+  lang: Lang;
   boot: Bootstrap;
   session: Session | null;
   busy: boolean;
+  focusMessageId: string | null;
   setBusy: (busy: boolean) => void;
   setError: (error: string | null) => void;
+  onOpen: (id: string, messageId?: string | null) => void;
+  onBranch: (messageId: string, includeMessage: boolean, replacement?: string) => Promise<void>;
   onSession: (session: Session) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const { t, session } = props;
   const [draftText, setDraftText] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
   const [live, setLive] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [tools, setTools] = useState<Session["messages"][number]["tool_calls"]>([]);
@@ -226,8 +398,12 @@ function Chat(props: {
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (props.focusMessageId) {
+      document.getElementById(`message-${props.focusMessageId}`)?.scrollIntoView({ block: "center" });
+      return;
+    }
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [session, live, tools, approval]);
+  }, [session, live, tools, approval, props.focusMessageId]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -298,15 +474,51 @@ function Chat(props: {
             </div>
           </div>
         )}
+        {session?.parent_session_id && session.branched_at_index && (
+          <button
+            className="branch-banner"
+            onClick={() => props.onOpen(session.parent_session_id || "", session.branched_from_message_id)}
+          >
+            {branchBanner(props.lang, parentTitle(props.boot, session.parent_session_id), session.branched_at_index)}
+          </button>
+        )}
         <div className="transcript">
-          {session?.messages.map((message) => (
-            <article key={message.id} className={`bubble ${message.role}`}>
-              <div className="who">{message.role === "user" ? t("chat.you") : session?.model}</div>
-              {message.reasoning && <div className="reasoning">{message.reasoning}</div>}
-              {message.text && <div className="text">{message.text}</div>}
-              {message.tool_calls.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
-            </article>
-          ))}
+          {session?.messages.map((message, index) => {
+            const branches = props.boot.sessions.filter((item) => item.parent_session_id === session.id && item.branched_from_message_id === message.id);
+            return (
+              <article key={message.id} id={`message-${message.id}`} className={`bubble ${message.role} ${props.focusMessageId === message.id ? "focused" : ""}`}>
+                <div className="who">{message.role === "user" ? t("chat.you") : session.model} <span>#{index + 1}</span></div>
+                {message.reasoning && <div className="reasoning">{message.reasoning}</div>}
+                {editingId === message.id ? (
+                  <textarea className="edit-box" value={editText} onChange={(event) => setEditText(event.target.value)} />
+                ) : (
+                  message.text && <div className="text">{message.text}</div>
+                )}
+                {message.tool_calls.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
+                <div className="msg-actions">
+                  <button type="button" className="ghost" disabled={props.busy} onClick={() => void props.onBranch(message.id, true).catch((reason: unknown) => props.setError(String(reason)))}>{t("chat.branch")}</button>
+                  {message.role === "user" && editingId !== message.id && (
+                    <button type="button" className="ghost" disabled={props.busy} onClick={() => { setEditingId(message.id); setEditText(message.text); }}>{t("chat.edit")}</button>
+                  )}
+                  {editingId === message.id && (
+                    <button type="button" className="primary" disabled={props.busy || !editText.trim()} onClick={() => {
+                      const text = editText;
+                      setEditingId(null);
+                      void props.onBranch(message.id, false, text).catch((reason: unknown) => props.setError(String(reason)));
+                    }}>{t("chat.resend")}</button>
+                  )}
+                </div>
+                {branches.length > 0 && (
+                  <div className="branch-list">
+                    <span>{t("chat.branches")}</span>
+                    {branches.map((item) => (
+                      <button key={item.id} type="button" onClick={() => props.onOpen(item.id)}>{item.title}</button>
+                    ))}
+                  </div>
+                )}
+              </article>
+            );
+          })}
           {props.busy && (
             <article className="bubble assistant">
               <div className="who">{t("chat.thinking")}</div>
