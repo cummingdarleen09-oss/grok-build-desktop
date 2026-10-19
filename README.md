@@ -93,7 +93,7 @@ cargo install tauri-cli --version 2.10.1 --locked
 cd desktop && npx tauri build
 ```
 
-Pin the Tauri crates to the 2.10.3 set already listed in `desktop/src-tauri/Cargo.toml`. The published `tauri-cli` / `@tauri-apps/cli` line stops at 2.10.1. Newer patch releases of `tauri-runtime`, `wry`, and `tauri-macros` do not compile together.
+Pin the Tauri crates to the 2.10.3 set already listed in `desktop/src-tauri/Cargo.toml`. The published `tauri-cli` / `@tauri-apps/cli` line stops at 2.10.1. `@tauri-apps/api` is pinned to 2.10.1 so its major.minor matches the Rust `tauri` crate; the CLI refuses to bundle when they differ. Newer patch releases of `tauri-runtime`, `wry`, and `tauri-macros` do not compile together.
 
 ## Build and run the original CLI / TUI
 

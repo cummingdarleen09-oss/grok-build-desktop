@@ -157,6 +157,19 @@ jobs:
         working-directory: desktop
         run: npm ci && npm install --no-save @tauri-apps/cli@2.10.1
 
+      # bin/protoc is a dotslash wrapper with no Windows platform, so it is
+      # not a Win32 binary. Point PROTOC at the protoc installed above.
+      # Forward slashes stay intact in GITHUB_ENV; Rust accepts them.
+      - name: Use the installed protoc on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          proto_path="$(cygpath -m "$(command -v protoc)")"
+          echo "PROTOC=${proto_path}" >> "$GITHUB_ENV"
+          echo "Using PROTOC=${proto_path}"
+          protoc --version
+
       - name: Build the CLI (xai-grok-pager)
         env:
           CARGO_BUILD_JOBS: "2"

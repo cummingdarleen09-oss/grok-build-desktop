@@ -31,6 +31,74 @@ fn find_protoc_include_dir(protoc: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
+/// Temp paths for `protoc --dependency_out` / `--descriptor_set_out` on Windows,
+/// where `/dev/stdout` and `/dev/null` are not devices protoc can open.
+struct WindowsDepFiles {
+    _dir: tempfile::TempDir,
+    dep_path: PathBuf,
+    desc_path: PathBuf,
+}
+
+fn windows_dep_files() -> anyhow::Result<Option<WindowsDepFiles>> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    let dir = tempfile::TempDir::new().context("protoc dependency temp dir")?;
+    let dep_path = dir.path().join("deps.d");
+    let desc_path = dir.path().join("desc.pb");
+    Ok(Some(WindowsDepFiles {
+        _dir: dir,
+        dep_path,
+        desc_path,
+    }))
+}
+
+fn descriptor_prefixes(desc_path: &Path) -> Vec<String> {
+    let displayed = desc_path.display().to_string();
+    let mut prefixes = vec![format!("{displayed}:")];
+    let forward = displayed.replace('\\', "/");
+    if forward != displayed {
+        prefixes.push(format!("{forward}:"));
+    }
+    let back = displayed.replace('/', "\\");
+    if back != displayed {
+        prefixes.push(format!("{back}:"));
+    }
+    prefixes
+}
+
+fn emit_dependency_lines(dep_text: &str, prefixes: &[String]) -> anyhow::Result<()> {
+    let mut lines = dep_text.lines();
+    let first_line = lines.next().context("protoc command output is empty")?;
+    let rem = prefixes
+        .iter()
+        .find_map(|prefix| first_line.strip_prefix(prefix.as_str()))
+        .with_context(|| {
+            format!("protoc command output must start with one of {prefixes:?}: {dep_text:?}")
+        })?;
+    for line in iter::once(rem).chain(lines) {
+        let line = line.trim();
+        let line = line.strip_suffix('\\').unwrap_or(line);
+        // Depending on absolute paths like
+        // /Users/user/homebrew/Cellar/protobuf/29.1/include/google/protobuf/timestamp.proto
+        // is valid, but we want to have output more deterministic.
+        let normalized = line.replace('\\', "/");
+        if normalized.contains("/include/google/protobuf/") {
+            continue;
+        }
+        if line.is_empty() {
+            continue;
+        }
+
+        if !fs::exists(line)? {
+            return Err(anyhow::anyhow!("dependency file not found: {line}"));
+        }
+
+        println!("cargo:rerun-if-changed={line}");
+    }
+    Ok(())
+}
+
 pub struct XaiProtoBuilder {
     builder: tonic_prost_build::Builder,
     file_descriptor_set_path: Option<PathBuf>,
@@ -152,10 +220,28 @@ impl XaiProtoBuilder {
 
         // Can only process one input file when using --dependency_out=FILE.
         for proto in protos {
+            // Unix protoc accepts /dev/stdout and /dev/null. The Windows
+            // protoc from setup-protoc does not, and bin/protoc is a dotslash
+            // wrapper with no Windows platform, so the release build falls
+            // through to that system binary. Write the makefile and descriptor
+            // set to temp files instead.
+            let dep_files = windows_dep_files()?;
             let mut command = Command::new(protoc.unwrap_or(Path::new("protoc")));
-            command
-                .arg("--dependency_out=/dev/stdout")
-                .arg("--descriptor_set_out=/dev/null");
+            match &dep_files {
+                Some(files) => {
+                    command
+                        .arg(format!("--dependency_out={}", files.dep_path.display()))
+                        .arg(format!(
+                            "--descriptor_set_out={}",
+                            files.desc_path.display()
+                        ));
+                }
+                None => {
+                    command
+                        .arg("--dependency_out=/dev/stdout")
+                        .arg("--descriptor_set_out=/dev/null");
+                }
+            }
 
             // Add protoc's well-known types include directory first (if found).
             // This is needed for Bazel sandboxed builds where protoc and its
@@ -174,38 +260,32 @@ impl XaiProtoBuilder {
             command.arg(proto);
 
             command.stdin(Stdio::null());
-            command.stderr(Stdio::inherit());
+            command.stderr(Stdio::piped());
 
             let output = command.output().context("protoc command failed")?;
+            if !output.stderr.is_empty() {
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            }
             if !output.status.success() {
-                return Err(anyhow::anyhow!("protoc command failed"));
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow::anyhow!(
+                    "protoc command failed ({}): {stderr}",
+                    output.status
+                ));
             }
 
-            let output =
-                String::from_utf8(output.stdout).context("protoc command output not UTF-8")?;
-
-            let mut lines = output.lines();
-            let first_line = lines.next().context("protoc command output is empty")?;
-            let prefix = "/dev/null:";
-            let rem = first_line.strip_prefix(prefix).with_context(|| {
-                format!("protoc command output must start with /dev/null: {output:?}")
-            })?;
-            for line in iter::once(rem).chain(lines) {
-                let line = line.trim();
-                let line = line.strip_suffix("\\").unwrap_or(line);
-                // Depending on absolute paths like
-                // /Users/user/homebrew/Cellar/protobuf/29.1/include/google/protobuf/timestamp.proto
-                // is valid, but we want to have output more deterministic.
-                if line.contains("/include/google/protobuf/") {
-                    continue;
-                }
-
-                if !fs::exists(line)? {
-                    return Err(anyhow::anyhow!("dependency file not found: {line}"));
-                }
-
-                println!("cargo:rerun-if-changed={line}");
-            }
+            let dep_text =
+                match &dep_files {
+                    Some(files) => fs::read_to_string(&files.dep_path)
+                        .context("reading protoc dependency file")?,
+                    None => String::from_utf8(output.stdout)
+                        .context("protoc command output not UTF-8")?,
+                };
+            let prefixes: Vec<String> = match &dep_files {
+                Some(files) => descriptor_prefixes(&files.desc_path),
+                None => vec!["/dev/null:".to_string()],
+            };
+            emit_dependency_lines(&dep_text, &prefixes)?;
         }
 
         Ok(())
@@ -341,6 +421,26 @@ impl XaiProtoBuilder {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_makefile_accepts_windows_descriptor_paths() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let proto = dir.path().join("widget.proto");
+        fs::write(&proto, "syntax = \"proto3\";\n").unwrap();
+        let desc = PathBuf::from(r"C:\proto-out\desc.pb");
+        let prefixes = descriptor_prefixes(&desc);
+        let dep = format!("{} {}\n", prefixes[0], proto.display());
+        emit_dependency_lines(&dep, &prefixes).unwrap();
+
+        // protoc writes `target: dep\` with no space before the continuation.
+        let unix = format!("/dev/null: {}\\\n", proto.display());
+        emit_dependency_lines(&unix, &["/dev/null:".to_string()]).unwrap();
     }
 }
 

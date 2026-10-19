@@ -94,7 +94,7 @@ cargo install tauri-cli --version 2.10.1 --locked
 cd desktop && npx tauri build
 ```
 
-`desktop/src-tauri/Cargo.toml` 把 Tauri 相关 crate 锁在 2.10.3 这一组。CLI 只有 2.10.1。`tauri-runtime`、`wry`、`tauri-macros` 的更新补丁不能混用，否则编不过。
+`desktop/src-tauri/Cargo.toml` 把 Tauri 相关 crate 锁在 2.10.3 这一组。CLI 只有 2.10.1。`@tauri-apps/api` 也固定在 2.10.1，主次版本必须和 Rust `tauri` crate 一致，否则 CLI 拒绝打包。`tauri-runtime`、`wry`、`tauri-macros` 的更新补丁不能混用，否则编不过。
 
 ## 编译并运行原来的 CLI / TUI
 
