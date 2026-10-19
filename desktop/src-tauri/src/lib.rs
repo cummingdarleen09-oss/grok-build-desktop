@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use grok_desktop_core::{
     AgentEvent, DesktopSettings, ExtensionRecord, Session, SessionSummary, TurnControl,
-    create_session, delete_session, discover_extensions, list_sessions, load_session,
-    load_settings, run_turn, save_session, save_settings, tr,
+    branch_session, create_session, delete_session, discover_extensions, list_sessions,
+    load_session, load_settings, rename_session, run_turn, save_session, save_settings, tr,
 };
 use grok_providers::{
     ProviderClient, ProviderConfig, ProviderStore, SecretLocation, SecretStore, Turn, apply_choice,
@@ -167,6 +167,88 @@ fn open_chat(id: String) -> Result<Session, String> {
 #[tauri::command]
 fn remove_chat(id: String) -> Result<(), String> {
     delete_session(&id)
+}
+
+#[tauri::command]
+fn rename_chat(id: String, title: String) -> Result<Session, String> {
+    rename_session(&id, &title)
+}
+
+#[tauri::command]
+fn branch_chat(
+    session_id: String,
+    message_id: String,
+    include_message: bool,
+    lang: String,
+) -> Result<Session, String> {
+    let parent = load_session(&session_id)?;
+    let title = format!("{} · {}", tr(&lang, "branch_title"), parent.title);
+    branch_session(&session_id, &message_id, include_message, &title)
+}
+
+#[tauri::command]
+fn pick_project_folder() -> Result<String, String> {
+    match pick_folder() {
+        Some(path) if !path.trim().is_empty() => Ok(path),
+        Some(_) | None => Err("cancelled".into()),
+    }
+}
+
+fn pick_folder() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        return picker_stdout(
+            "osascript",
+            &[
+                "-e",
+                r#"POSIX path of (choose folder with prompt "Open project")"#,
+            ],
+        )
+        .ok()
+        .flatten();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return picker_stdout(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Open project'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }",
+            ],
+        )
+        .ok()
+        .flatten();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        match picker_stdout(
+            "zenity",
+            &[
+                "--file-selection",
+                "--directory",
+                "--title=Open project",
+            ],
+        ) {
+            Ok(path) => path,
+            Err(()) => picker_stdout("kdialog", &["--getexistingdirectory", "."])
+                .ok()
+                .flatten(),
+        }
+    }
+}
+
+/// `Ok(None)` is a cancel. `Err(())` means the picker program is not installed.
+fn picker_stdout(program: &str, args: &[&str]) -> Result<Option<String>, ()> {
+    let output = std::process::Command::new(program).args(args).output().map_err(|_| ())?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    while text.len() > 1 && (text.ends_with('/') || text.ends_with('\\')) {
+        text.pop();
+    }
+    Ok(if text.is_empty() { None } else { Some(text) })
 }
 
 #[tauri::command]
@@ -346,6 +428,9 @@ pub fn run() {
             create_chat,
             open_chat,
             remove_chat,
+            rename_chat,
+            branch_chat,
+            pick_project_folder,
             send_prompt,
             cancel_prompt,
             resolve_approval,

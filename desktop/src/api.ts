@@ -34,6 +34,7 @@ export interface Settings {
   cwd: string;
   active_provider: string | null;
   disabled_tools: string[];
+  known_projects: string[];
 }
 
 export interface StoredTool {
@@ -61,6 +62,9 @@ export interface Session {
   created_at: string;
   updated_at: string;
   messages: ChatMessage[];
+  parent_session_id?: string | null;
+  branched_from_message_id?: string | null;
+  branched_at_index?: number | null;
 }
 
 export interface SessionSummary {
@@ -68,7 +72,12 @@ export interface SessionSummary {
   title: string;
   model: string;
   provider_id: string;
+  cwd: string;
   updated_at: string;
+  parent_session_id?: string | null;
+  branched_from_message_id?: string | null;
+  branched_at_index?: number | null;
+  origin: "desktop" | "classic";
 }
 
 export interface ExtensionRecord {
@@ -124,24 +133,20 @@ function seed(): Bootstrap {
     preset("openai", "OpenAI-compatible", "openai", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY", "bearer", "max_completion_tokens", 128000, ["gpt-4o", "gpt-4.1"], false, false),
     preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "x_api_key", "max_tokens", 200000, ["claude-sonnet-4-5", "claude-opus-4-5"], false, false),
   ];
+  const project = "/workspace/grok-build-desktop";
+  const notes = "/home/dev/notes";
   const session: Session = {
     id: "demo",
     title: "Read the provider layer",
-    cwd: "/workspace",
+    cwd: project,
     provider_id: "deepseek",
     model: "deepseek-chat",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     messages: [
+      msg("m1", "user", "Where do DeepSeek requests get their URL?"),
       {
-        id: "u1",
-        role: "user",
-        text: "Where do DeepSeek requests get their URL?",
-        reasoning: "",
-        tool_calls: [],
-      },
-      {
-        id: "a1",
+        id: "m2",
         role: "assistant",
         text: "DeepSeek uses the OpenAI-compatible root https://api.deepseek.com, and the client appends chat/completions.",
         reasoning: "Check the preset table, then the endpoint joiner.",
@@ -155,19 +160,49 @@ function seed(): Bootstrap {
           },
         ],
       },
+      msg("m3", "user", "Check the preset table specifically."),
+      msg("m4", "assistant", "The preset row sets base_url to https://api.deepseek.com and format to openai."),
+      msg("m5", "user", "Does the desktop app call that same client?"),
+      msg("m6", "assistant", "Yes. grok-desktop-core sends the transcript through grok-providers."),
     ],
   };
+  const branch: Session = {
+    id: "branch-demo",
+    title: "分支 · Read the provider layer",
+    cwd: project,
+    provider_id: "deepseek",
+    model: "deepseek-chat",
+    created_at: new Date().toISOString(),
+    updated_at: new Date(Date.now() + 1000).toISOString(),
+    parent_session_id: "demo",
+    branched_from_message_id: "m3",
+    branched_at_index: 3,
+    messages: session.messages.slice(0, 3).map((message) => ({ ...message, tool_calls: message.tool_calls.map((tool) => ({ ...tool })) })),
+  };
+  const scratch: Session = {
+    id: "notes",
+    title: "Meeting notes",
+    cwd: notes,
+    provider_id: "kimi",
+    model: "moonshot-v1-128k",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    messages: [msg("n1", "user", "Keep a short list of follow-ups for this folder.")],
+  };
   memorySessions.set(session.id, session);
+  memorySessions.set(branch.id, branch);
+  memorySessions.set(scratch.id, scratch);
   return {
     settings: {
       lang: "zh-CN",
       permission: "ask",
-      cwd: "/workspace",
+      cwd: project,
       active_provider: "xai",
       disabled_tools: [],
+      known_projects: [project, notes],
     },
     providers: { active: "xai", providers },
-    sessions: [summary(session)],
+    sessions: [summary(branch), summary(session), summary(scratch)],
     extensions: [
       {
         kind: "tool",
@@ -223,13 +258,22 @@ function preset(
   };
 }
 
+function msg(id: string, role: "user" | "assistant", text: string): ChatMessage {
+  return { id, role, text, reasoning: "", tool_calls: [] };
+}
+
 function summary(session: Session): SessionSummary {
   return {
     id: session.id,
     title: session.title,
     model: session.model,
     provider_id: session.provider_id,
+    cwd: session.cwd,
     updated_at: session.updated_at,
+    parent_session_id: session.parent_session_id ?? null,
+    branched_from_message_id: session.branched_from_message_id ?? null,
+    branched_at_index: session.branched_at_index ?? null,
+    origin: "desktop",
   };
 }
 
@@ -293,8 +337,7 @@ export async function createChat(cwd: string, providerId: string, model: string,
       updated_at: new Date().toISOString(),
       messages: [],
     };
-    memorySessions.set(session.id, session);
-    memory.sessions.unshift(summary(session));
+    remember(session);
     return session;
   }
   return invoke("create_chat", { cwd, providerId, model, lang });
@@ -316,6 +359,89 @@ export async function removeChat(id: string): Promise<void> {
     return;
   }
   await invoke("remove_chat", { id });
+}
+
+export async function renameChat(id: string, title: string): Promise<Session> {
+  if (!inTauri()) {
+    const session = memorySessions.get(id);
+    if (!session) throw new Error("missing session");
+    session.title = title.trim();
+    session.updated_at = new Date().toISOString();
+    remember(session);
+    return structuredClone(session);
+  }
+  return invoke<Session>("rename_chat", { id, title });
+}
+
+export async function branchChat(
+  sessionId: string,
+  messageId: string,
+  includeMessage: boolean,
+  lang: string,
+): Promise<Session> {
+  if (!inTauri()) {
+    const parent = memorySessions.get(sessionId);
+    if (!parent) throw new Error("missing session");
+    const index = parent.messages.findIndex((message) => message.id === messageId);
+    if (index < 0) throw new Error("message not found");
+    if (!includeMessage && parent.messages[index].role !== "user") {
+      throw new Error("only a user message can be edited into a new branch");
+    }
+    const end = includeMessage ? index + 1 : index;
+    const messages = parent.messages.slice(0, end).map((message) => ({
+      ...message,
+      tool_calls: message.tool_calls.map((tool) => ({ ...tool })),
+    }));
+    const last = messages[messages.length - 1];
+    if (last && last.role === "assistant") {
+      last.tool_calls = last.tool_calls.filter((tool) => tool.output != null);
+      if (!last.text.trim() && !last.reasoning.trim() && last.tool_calls.length === 0) messages.pop();
+    }
+    const session: Session = {
+      id: crypto.randomUUID(),
+      title: `${lang.startsWith("zh") ? "分支" : "Branch"} · ${parent.title}`,
+      cwd: parent.cwd,
+      provider_id: parent.provider_id,
+      model: parent.model,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      messages,
+      parent_session_id: parent.id,
+      branched_from_message_id: messageId,
+      branched_at_index: index + 1,
+    };
+    remember(session);
+    return structuredClone(session);
+  }
+  return invoke<Session>("branch_chat", {
+    sessionId,
+    messageId,
+    includeMessage,
+    lang,
+  });
+}
+
+export async function pickProjectFolder(): Promise<string | null> {
+  if (!inTauri()) {
+    const typed = window.prompt("Project folder");
+    return typed && typed.trim() ? typed.trim() : null;
+  }
+  try {
+    return await invoke<string>("pick_project_folder");
+  } catch (error) {
+    const message = String(error);
+    if (message.includes("cancelled")) return null;
+    const typed = window.prompt("Project folder");
+    return typed && typed.trim() ? typed.trim() : null;
+  }
+}
+
+function remember(session: Session) {
+  memorySessions.set(session.id, session);
+  const next = summary(session);
+  const index = memory.sessions.findIndex((item) => item.id === session.id);
+  if (index >= 0) memory.sessions[index] = next;
+  else memory.sessions.unshift(next);
 }
 
 export async function sendPrompt(
@@ -341,6 +467,10 @@ export async function sendPrompt(
       tool_calls: [],
     });
     session.updated_at = new Date().toISOString();
+    if (session.title === "新会话" || session.title === "New chat") {
+      session.title = text.slice(0, 48);
+    }
+    remember(session);
     return structuredClone(session);
   }
   const { listen } = await import("@tauri-apps/api/event");

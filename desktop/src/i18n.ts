@@ -9,6 +9,15 @@ const en = {
   "nav.shortcuts": "Shortcuts",
   "nav.settings": "Settings",
   "chat.new": "New chat",
+  "chat.rename": "Rename",
+  "chat.branch": "Branch from here",
+  "chat.edit": "Edit",
+  "chat.resend": "Resend as branch",
+  "chat.branches": "Branches",
+  "project.add": "Add project",
+  "project.empty": "No conversations in this folder yet.",
+  "project.classic": "Classic TUI",
+  "project.classicBody": "This conversation belongs to the classic TUI for this project. Open the Classic TUI page to continue it there.",
   "chat.emptyTitle": "What should we change?",
   "chat.emptyBody":
     "Grok Desktop reads the working directory, edits files, and runs commands. Pick a provider in Settings, then ask in Chinese or English.",
@@ -96,6 +105,15 @@ const zh: Record<keyof typeof en, string> = {
   "nav.shortcuts": "快捷键",
   "nav.settings": "设置",
   "chat.new": "新对话",
+  "chat.rename": "重命名",
+  "chat.branch": "从这里分支",
+  "chat.edit": "编辑",
+  "chat.resend": "作为新分支重发",
+  "chat.branches": "分支",
+  "project.add": "添加项目",
+  "project.empty": "这个文件夹还没有对话。",
+  "project.classic": "经典终端",
+  "project.classicBody": "这段对话属于这个项目的经典终端。打开「经典终端」页可以在那里继续。",
   "chat.emptyTitle": "想改什么？",
   "chat.emptyBody":
     "Grok 桌面版会阅读工作目录、修改文件并执行命令。先在设置里选好供应商，然后用中文或英文提问。",
@@ -178,6 +196,11 @@ export type Key = keyof typeof en;
 
 export function translate(lang: Lang, key: Key): string {
   return lang === "zh-CN" ? zh[key] : en[key];
+}
+
+export function branchBanner(lang: Lang, title: string, index: number): string {
+  if (lang === "zh-CN") return `从「${title}」的第 ${index} 条消息分支`;
+  return `Branched from ${title} @ message ${index}`;
 }
 
 export const desktopShortcuts = [

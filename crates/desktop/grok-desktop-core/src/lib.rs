@@ -17,8 +17,9 @@ pub use agent::{AgentEvent, TurnControl, run_turn};
 pub use extensions::{ExtensionRecord, discover_extensions};
 pub use grok_providers;
 pub use sessions::{
-    ChatMessage, Session, SessionSummary, StoredTool, create_session, delete_session,
-    list_sessions, load_session, save_session,
+    ChatMessage, ProjectGroup, Session, SessionSummary, StoredTool, branch_session,
+    conversation_turns, create_session, delete_session, group_sessions, list_sessions,
+    load_session, normalize_project_path, rename_session, save_session,
 };
 pub use settings::{DesktopSettings, load_settings, save_settings};
 pub use text::tr;

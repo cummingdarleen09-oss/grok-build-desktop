@@ -28,7 +28,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .app {
   height: 100%;
   display: grid;
-  grid-template-columns: 248px 1fr;
+  grid-template-columns: 292px 1fr;
   min-height: 0;
 }
 
@@ -79,12 +79,54 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .session-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 12px;
   overflow: auto;
   min-height: 0;
 }
-.session-list button { display: flex; flex-direction: column; gap: 2px; }
-.session-list em { font-style: normal; color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.project { display: flex; flex-direction: column; gap: 4px; }
+.project.active .project-head strong { color: var(--accent); }
+.project-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 4px 8px;
+}
+.project-head span, .project-empty {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-empty { margin: 0 8px 4px; font-family: inherit; }
+.conversation { display: flex; gap: 4px; align-items: stretch; }
+.conversation button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 10px;
+  text-align: left;
+  padding: 8px 10px;
+}
+.conversation.active button, .conversation button:hover { background: var(--raised); border-color: var(--line); }
+.conversation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation em { font-style: normal; color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.conversation .icon, .msg-actions .ghost, .msg-actions .primary {
+  flex: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+.conversation input { width: 100%; }
 
 .primary {
   background: var(--accent);
@@ -143,9 +185,40 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   padding: 8px 12px;
 }
 
+.branch-banner {
+  display: block;
+  width: min(920px, 100%);
+  margin: 0 0 14px;
+  text-align: left;
+  border: 1px solid #5c6230;
+  background: #242816;
+  color: var(--accent);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.branch-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: min(720px, 100%); }
+.branch-list span { color: var(--muted); font-size: 12px; }
+.branch-list button {
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.msg-actions { display: flex; gap: 6px; }
+.edit-box {
+  width: min(720px, 100%);
+  min-height: 72px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  padding: 12px 14px;
+}
+.bubble.focused .text { outline: 2px solid var(--accent); }
 .bubble { display: flex; flex-direction: column; gap: 6px; }
 .bubble.user { align-items: flex-end; }
 .bubble .who { font-size: 12px; color: var(--muted); }
+.who span { font-family: ui-monospace, monospace; }
 .bubble .text {
   white-space: pre-wrap;
   background: var(--raised);
@@ -259,7 +332,7 @@ kbd {
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
   .nav { flex-direction: row; overflow: auto; }
-  .session-list { display: none; }
+  .session-list { max-height: 240px; }
   .shortcut-grid { grid-template-columns: 1fr; }
   .empty h1 { font-size: 32px; }
 }

@@ -9,6 +9,8 @@ English: [README.md](README.md).
 ## 这个分支增加了什么
 
 - **Grok Desktop**（`grok-desktop`）：基于 Tauri 2 的窗口（Windows、macOS、Linux）。包含会话、文件和终端工具、扩展发现、快捷键，以及中文（zh-CN）和英文设置界面。
+- **项目**：每段桌面对话都属于一个项目文件夹（代理的工作目录）。侧栏按文件夹分组。可以用系统文件夹选择器添加项目、切换项目，并在当前项目里新建、重命名或删除对话。新对话使用当前选中的项目。会话保存在 `$GROK_HOME/desktop-sessions/<编码后的工作目录>/`，目录名编码与经典 TUI 的 `~/.grok/sessions/<编码后的工作目录>/` 相同。同一文件夹下的经典 TUI 会话会出现在同一组里。
+- **分支**：在任意一条消息上选择「从这里分支」，会把第 1 到第 N 条消息复制到一段新对话（同一项目、同一供应商和模型），原对话保持不变。编辑过去的用户消息并重发，会从那条消息之前分出新分支，再用修改后的文本继续。如果分支点落在一轮工具调用的中间，已完成的工具结果会保留，没有输出的调用会被丢掉，模型收到的就是这段截断后的历史。
 - **窗口里的经典 TUI**：终端页用 PTY 启动原来的 `xai-grok-pager`。斜杠命令、插件、hooks、MCP、沙箱，以及上游 TUI 的其余能力都还在。
 - **供应商**（`grok-providers`）：xAI/Grok（Responses API，默认供应商）、OpenAI 兼容的 Chat Completions，以及 Anthropic Messages。支持流式输出和工具调用。内置 Grok、DeepSeek、月之暗面 Kimi、通用 OpenAI、Claude。这三种协议都可以添加自定义供应商。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。Grok 会复用 `grok login` 的登录会话。
 

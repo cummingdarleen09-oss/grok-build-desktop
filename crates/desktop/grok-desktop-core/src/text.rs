@@ -52,6 +52,13 @@ pub fn tr(lang: &str, key: &str) -> String {
                 "New chat"
             }
         }
+        "branch_title" => {
+            if zh {
+                "分支"
+            } else {
+                "Branch"
+            }
+        }
         _ => key,
     };
     text.to_string()

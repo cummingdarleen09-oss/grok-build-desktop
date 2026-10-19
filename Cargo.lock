@@ -5377,6 +5377,7 @@ dependencies = [
 name = "grok-desktop-core"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "chrono",
  "futures-util",
  "grok-providers",
@@ -5386,6 +5387,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
+ "urlencoding",
  "uuid",
  "walkdir",
 ]
