@@ -1,6 +1,6 @@
 # Grok Desktop
 
-这是 [grok-build](https://github.com/xai-org/grok-build) 的桌面分支（Apache-2.0，Copyright 2023-2026 SpaceXAI）。原来的命令行和全屏 TUI 仍然可以在这棵代码树里编译。本分支增加了原生桌面窗口，以及可插拔的第三方模型供应商。
+这是 [grok-build](https://github.com/xai-org/grok-build) 的桌面分支（Apache-2.0，Copyright 2023-2026 SpaceXAI）。原来的命令行仍然可以在这棵代码树里编译，并随发布包提供。本分支增加了原生桌面窗口，以及可插拔的第三方模型供应商。
 
 上游基线：git `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`。单仓库快照记录在 [`SOURCE_REV`](SOURCE_REV)。上游原文 README 保留为 [`UPSTREAM_README.md`](UPSTREAM_README.md)。许可证：[`LICENSE`](LICENSE)。第三方声明：[`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES)。
 
@@ -8,24 +8,25 @@ English: [README.md](README.md).
 
 ## 这个分支增加了什么
 
-- **Grok Desktop**（`grok-desktop`）：基于 Tauri 2 的窗口（Windows、macOS、Linux）。包含会话、文件和终端工具、扩展发现、快捷键，以及中文（zh-CN）和英文设置界面。
-- **项目**：每段桌面对话都属于一个项目文件夹（代理的工作目录）。侧栏按文件夹分组。可以用系统文件夹选择器添加项目、切换项目，并在当前项目里新建、重命名或删除对话。新对话使用当前选中的项目。会话保存在 `$GROK_HOME/desktop-sessions/<编码后的工作目录>/`，目录名编码与经典 TUI 的 `~/.grok/sessions/<编码后的工作目录>/` 相同。同一文件夹下的经典 TUI 会话会出现在同一组里。
+- **Grok Desktop**（`grok-desktop`）：基于 Tauri 2 的窗口（Windows、macOS、Linux）。包含会话、文件和命令工具、扩展发现、快捷键，以及中文（zh-CN）和英文设置界面。
+- **项目**：每段桌面对话都属于一个项目文件夹（代理的工作目录）。侧栏把这些文件夹列为仓库。可以用系统文件夹选择器添加项目、切换项目，并在当前项目里新建、重命名或删除对话。新对话使用当前选中的项目。会话保存在 `$GROK_HOME/desktop-sessions/<编码后的工作目录>/`，目录名编码与 CLI 的 `~/.grok/sessions/<编码后的工作目录>/` 相同。同一文件夹下的 CLI 会话会以只读方式在对话里打开。
 - **分支**：在任意一条消息上选择「从这里分支」，会把第 1 到第 N 条消息复制到一段新对话（同一项目、同一供应商和模型），原对话保持不变。编辑过去的用户消息并重发，会从那条消息之前分出新分支，再用修改后的文本继续。如果分支点落在一轮工具调用的中间，已完成的工具结果会保留，没有输出的调用会被丢掉，模型收到的就是这段截断后的历史。
-- **窗口里的经典 TUI**：终端页用 PTY 启动原来的 `xai-grok-pager`。斜杠命令、插件、hooks、MCP、沙箱，以及上游 TUI 的其余能力都还在。
-- **供应商**（`grok-providers`）：xAI/Grok（Responses API，默认供应商）、OpenAI 兼容的 Chat Completions，以及 Anthropic Messages。支持流式输出和工具调用。内置 Grok、DeepSeek、月之暗面 Kimi、通用 OpenAI、Claude。这三种协议都可以添加自定义供应商。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。Grok 会复用 `grok login` 的登录会话。
+- **工作台**：窗口采用 Cursor 桌面的布局（新对话、搜索、自动化、自定义、仓库树），并吸收了 [grok-app](https://github.com/RongleCat/grok-app)（MIT，Copyright (c) 2026 RongleCat）的工作台想法：会话、对话看板、项目媒体预览、定时自动化。浅色和深色主题。`xai-grok-pager` 仍是单独发布的二进制。
+- **MCP 与图**：`config.toml` 里的 stdio MCP 会在桌面对话中被列出并调用。Mermaid 代码块用仓库里的 `mermaid-to-svg` 渲染。计划模式不会改文件，也不会执行命令。
+- **供应商**（`grok-providers`）：用户可以添加任意多个提供商。每个提供商有显示名称、三种接口格式之一（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses API）、接口地址、钥匙串里的密钥，以及模型列表。DeepSeek、月之暗面 Kimi、OpenAI、Claude 只是可选模板，不是固定厂商列表。Grok 仍是内置项，默认始终使用最新模型。在「设置 → 自定义提供商 → 官方 Grok」里点 **登录**。按钮会打开系统浏览器，走和命令行相同的 xAI OAuth 回环流程（`xai-grok-login`，同一个 client id），并把会话写进同一份 `auth.json`（`GROK_AUTH`、`$GROK_AUTH_PATH` 或 `$GROK_HOME/auth.json`）。退出登录和刷新令牌都在应用内完成。没有会话时仍可使用 API 密钥；有会话时优先用会话。Responses 请求是通用的 OpenAI 形态，基址用你填写的地址。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。
 
 ## 结构
 
 ```
 desktop/                  React + Vite 界面（zh-CN / en）
-desktop/src-tauri/        Tauri 2 外壳，以及经典 TUI 的 PTY
+desktop/src-tauri/        Tauri 2 外壳（应用内 Grok 登录）
 crates/desktop/grok-desktop-core/   会话、工具、代理循环
 crates/providers/grok-providers/    请求翻译、SSE、预设、密钥、CLI 合并
 crates/codegen/xai-grok-shell/      上游代理；读取 providers.toml 和环境变量预设
 crates/codegen/xai-grok-pager-bin/  上游 CLI（二进制名 xai-grok-pager）
 ```
 
-桌面代理没有链接完整的 `xai-grok-shell`。模型请求走 `grok-providers`，工具只有 `read_file`、`write_file`、`search_replace`、`grep`、`list_dir`、`run_terminal`。要用上游的全部能力，请运行原来的二进制。CLI 加载配置时在内存里合并供应商预设；你在配置里已经写过的 `[model.*]` 和 `[model_providers.*]` 不会被覆盖。
+桌面代理没有链接完整的 `xai-grok-shell`，也不会启动 `grok agent stdio`。如果像 grok-app 那样完全交给 CLI，就能用上钩子、沙箱、HTTP MCP 和语音，但会丢掉这套可分支的第三方会话和 `grok-providers` 的供应商循环。所以桌面对话保留这条循环，并加上 stdio MCP；钩子、语音、沙箱策略和 HTTP MCP 仍在独立 CLI 里。CLI 加载配置时在内存里合并供应商预设；你在配置里已经写过的 `[model.*]` 和 `[model_providers.*]` 不会被覆盖。
 
 ## 环境
 
@@ -59,7 +60,7 @@ Node 22 从 <https://nodejs.org> 安装。
 
 ### Windows
 
-安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 通常已自带）、Visual Studio 的“使用 C++ 的桌面开发”生成工具、rustup 提供的 Rust，以及 Node.js 22。在 Developer PowerShell 里同样执行 `cargo build -p grok-desktop`。经典 TUI 页通过 `portable-pty` 使用 ConPTY。
+安装 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 通常已自带）、Visual Studio 的“使用 C++ 的桌面开发”生成工具、rustup 提供的 Rust，以及 Node.js 22。在 Developer PowerShell 里同样执行 `cargo build -p grok-desktop`。
 
 ## 编译并运行桌面应用
 
@@ -71,6 +72,8 @@ cd ..
 cargo build -p grok-desktop
 ./target/debug/grok-desktop
 ```
+
+官方 Grok 登录链接了 `xai-grok-login`，所以这次构建需要 `PATH` 上的 `protoc`（或 `PROTOC`），和编译命令行时用的是同一个编译器。
 
 只看界面时可以开开发服务器。不在 Tauri 窗口里时，它使用内存里的示例数据：
 
@@ -96,7 +99,7 @@ cd desktop && npx tauri build
 
 `desktop/src-tauri/Cargo.toml` 把 Tauri 相关 crate 锁在 2.10.3 这一组。CLI 只有 2.10.1。`@tauri-apps/api` 也固定在 2.10.1，主次版本必须和 Rust `tauri` crate 一致，否则 CLI 拒绝打包。`tauri-runtime`、`wry`、`tauri-macros` 的更新补丁不能混用，否则编不过。
 
-## 编译并运行原来的 CLI / TUI
+## 编译 CLI 二进制
 
 ```sh
 export PROTOC=/path/to/protoc   # 仅当 bin/protoc 无法通过 dotslash 运行时
@@ -104,7 +107,7 @@ cargo build -p xai-grok-pager-bin
 ./target/debug/xai-grok-pager
 ```
 
-桌面里的终端页按这个顺序找二进制：`GROK_BIN`，然后是 `PATH` 上的 `grok` 或 `xai-grok-pager`，再从当前目录向上找 `target/debug/xai-grok-pager` 和 `target/release/xai-grok-pager`。
+发布资源里的 `grok-<target>` 就是这个二进制。
 
 ## 下载
 
@@ -117,7 +120,7 @@ cargo build -p xai-grok-pager-bin
 | macOS Intel | `.dmg`（在 Apple Silicon runner 上交叉编译） | `grok-x86_64-apple-darwin` |
 | Linux x64 | `.deb` 和 `.AppImage` | `grok-x86_64-unknown-linux-gnu` |
 
-每个 `grok-<target>` 文件就是 `xai-grok-pager`。把它改名为 `grok` 或 `xai-grok-pager` 放进 `PATH`，或设置 `GROK_BIN`。桌面应用也会在自己的可执行文件旁边查找这些名字。CLI 构建需要 `protoc` 29.3，工作流会安装它。在配置下面的密钥之前，构建结果是未签名的。
+每个 `grok-<target>` 文件就是 `xai-grok-pager`。把它改名为 `grok` 或 `xai-grok-pager` 放进 `PATH`。CLI 构建需要 `protoc` 29.3，工作流会安装它。在配置下面的密钥之前，构建结果是未签名的。
 
 分支推送和 pull request 仍然运行 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml)：测试供应商并编译桌面二进制，不制作安装包。
 
@@ -128,7 +131,7 @@ Gatekeeper 会在第一次打开未签名或未公证的应用时拦截。
 1. 把 `Grok Desktop.app` 拖到 `/Applications`（也可以先不推出 `.dmg`）。
 2. 按住 Control 点按应用，选择 **打开**，再在对话框里点 **打开**。
 3. 如果系统只给出 **移到废纸篓**，打开 **系统设置 → 隐私与安全性**，找到被拦截的应用，选择 **仍要打开**。
-4. 也可以在终端去掉隔离属性再打开：
+4. 也可以用下面的命令去掉隔离属性再打开：
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/Grok Desktop.app"
@@ -190,7 +193,7 @@ cargo run -p grok-providers -- sync
 
 默认模型不是写死的版本。
 
-- 桌面应用每次启动时，如果设置里有密钥、存在 `grok login` 会话，或设置了 `XAI_API_KEY`，就请求 `GET https://api.x.ai/v1/models`。
+- 桌面应用每次启动时，如果有 OAuth 会话、设置里保存了密钥，或设置了 `XAI_API_KEY`，就请求 `GET https://api.x.ai/v1/models`。
 - 在形如 `grok-<数字>` 的 id 里，按**十进制**版本号选最高的（`4.7` 高于 `4.20` 和 `4.6`。这与 xAI 的产品线一致：Grok 4.7 比 4.20 系列更新）。
 - 后缀里含 `mini`、`vision`、`image`、`imagine`、`video`、`voice`、`audio`、`tts`、`stt`、`embed` 的 id 会跳过，除非返回的全是这类模型。同分时没有后缀的 id 优先（`grok-4.7` 先于 `grok-4.7-fast`）。
 - 列表缓存在 `~/.grok/xai-model-cache.json`。桌面应用每次启动都刷新。对 CLI 来说，这份缓存 6 小时内视为新鲜。
@@ -200,10 +203,10 @@ cargo run -p grok-providers -- sync
 
 2026-10-19 核对过公开文档：[模型列表](https://docs.x.ai/docs/models) 和 [Grok 4.7](https://docs.x.ai/developers/grok-4-7)（模型 id `grok-4.7`，50 万上下文，Responses API，页面更新于 2026-10-10）。本快照里上游的 `crates/codegen/xai-grok-models/default_models.json` 仍把 `grok-4.6` 当作内置默认，并列出 `grok-4.5`。该文件没有 `grok-4.7`；上游测试里把它当作夹具 id 使用过。
 
-这个预设的凭据顺序：设置里保存的密钥（钥匙串或 `0600` 文件），然后是 `grok login` 会话（`GROK_AUTH`、`$GROK_AUTH_PATH` 或 `$GROK_HOME/auth.json`），然后是 `XAI_API_KEY`，然后是 `GROK_CODE_XAI_API_KEY`，最后是 `auth.json` 里的 `xai::api_key`。同步到 CLI 的表使用 `api_backend = "responses"`，并且不写 `env_key`，所以上游自己的回退仍然让登录会话优先于 `XAI_API_KEY`。
+官方 Grok 的凭据顺序：`auth.json` 里已有的 OAuth 会话优先，然后是设置里保存的密钥（钥匙串或 `0600` 文件），然后是 `XAI_API_KEY`，然后是 `GROK_CODE_XAI_API_KEY`，最后是 `auth.json` 里的 `xai::api_key`。桌面应用自己写入这份会话。同步到 CLI 的表使用 `api_backend = "responses"`，并且不写 `env_key`，所以命令行自己的回退也会让登录会话优先于 `XAI_API_KEY`。
 
 ```sh
-export XAI_API_KEY=xai-...                 # 已经 grok login 成功时可以不设
+export XAI_API_KEY=xai-...                 # 已经有 OAuth 会话时可以不设
 export XAI_BASE_URL=https://api.x.ai/v1   # 可选
 export XAI_MODEL=grok-4.5                 # 可选，固定模型；不设则跟随最新
 cargo run -p grok-providers -- refresh-models
@@ -221,7 +224,7 @@ export DEEPSEEK_MODEL=deepseek-chat          # 可选
 export DEEPSEEK_BASE_URL=https://api.deepseek.com   # 可选
 ```
 
-在桌面应用里：设置 → 启用 DeepSeek → 设为当前供应商 → 粘贴密钥 → 保存。密钥进入钥匙串或 `0600` 文件。打开经典 TUI 时，进程会拿到环境变量 `DEEPSEEK_API_KEY`。
+在桌面应用里：设置 → 自定义提供商 → 添加提供商 → DeepSeek 模板 → 粘贴密钥 → 保存。密钥进入钥匙串或 `0600` 文件，仍按原来的提供商 id 查找，已保存的密钥不会丢。同一环境下单独运行 CLI 时，进程仍会读取 `DEEPSEEK_API_KEY`。
 
 ### 月之暗面 Kimi
 
@@ -292,6 +295,6 @@ cargo build -p xai-grok-pager-bin
 
 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) 在 Linux 上构建桌面应用并运行新增测试，在 macOS 和 Windows 上构建桌面应用。完整的上游 CLI 体积很大，而且需要 `protoc`，请在本机用上面的命令编译。
 
-## 还没有做成第二份 TUI 的部分
+## 桌面聊天和命令行
 
-桌面聊天是一条新的代理循环，工具就是上面那六个。它没有重做上游的 mermaid、语音、沙箱策略、ACP、hooks，也没有完整的 MCP 客户端。这些请打开终端页，或直接运行 `xai-grok-pager`。桌面循环一次只跑一轮对话；除非在设置里改成自动，否则写文件和执行命令前会先询问。模型名的默认值只是建议，账号所用的 id 不同时请改掉。
+桌面聊天是一条新的代理循环，工具是上面那六个，再加上 stdio MCP 和 Mermaid 图。语音、沙箱策略、ACP、hooks 和 HTTP MCP 仍在 `xai-grok-pager` 里。桌面循环一次只跑一轮对话；除非在设置里改成自动，否则写文件和执行命令前会先询问。模型名的默认值只是建议，账号所用的 id 不同时请改掉。定时自动化只在窗口开着的时候触发，退出之后不会在后台跑。

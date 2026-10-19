@@ -323,6 +323,7 @@ mod tests {
             },
             builtin: false,
             model_hints: Vec::new(),
+            models: Vec::new(),
             follow_latest: false,
         }
     }
@@ -409,6 +410,23 @@ mod tests {
                 .iter()
                 .all(|message| message["role"] != "system")
         );
+    }
+
+    #[test]
+    fn responses_endpoint_uses_any_base_url() {
+        assert_eq!(
+            endpoint_url("https://relay.example/v1", "responses").unwrap(),
+            "https://relay.example/v1/responses"
+        );
+        let body = responses_request_body(
+            &provider(ProviderFormat::Responses),
+            &[Turn::user("hi")],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(body["model"], "demo-model");
+        assert_eq!(body["input"][0]["role"], "user");
+        assert!(body.get("xai").is_none());
     }
 
     #[test]

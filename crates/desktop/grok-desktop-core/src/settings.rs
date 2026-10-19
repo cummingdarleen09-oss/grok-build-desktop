@@ -20,6 +20,9 @@ pub struct DesktopSettings {
     /// Project folders the user has opened, even when they have no conversations yet.
     #[serde(default)]
     pub known_projects: Vec<String>,
+    /// `light` or `dark`. The window starts in the light theme.
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_lang() -> String {
@@ -34,6 +37,10 @@ fn default_active_provider() -> Option<String> {
     Some("xai".into())
 }
 
+fn default_theme() -> String {
+    "light".into()
+}
+
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
@@ -46,6 +53,7 @@ impl Default for DesktopSettings {
             active_provider: default_active_provider(),
             disabled_tools: Vec::new(),
             known_projects: Vec::new(),
+            theme: default_theme(),
         }
     }
 }

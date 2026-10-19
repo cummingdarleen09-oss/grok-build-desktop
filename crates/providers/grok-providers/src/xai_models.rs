@@ -134,6 +134,7 @@ pub fn apply_choice(store: &mut ProviderStore, choice: &ModelChoice) {
     if !provider.model.is_empty() && !models.iter().any(|id| id == &provider.model) {
         models.push(provider.model.clone());
     }
+    provider.models = models.clone();
     provider.model_hints = models;
     if provider.follow_latest {
         provider.model = choice.latest.clone();
@@ -204,6 +205,38 @@ fn fetch_model_ids_blocking(base_url: &str, api_key: &str) -> Result<Vec<String>
     }
     let body: serde_json::Value = response.json().map_err(|error| error.to_string())?;
     Ok(parse_models_payload(&body))
+}
+
+/// `GET {base}/models` for any provider. OpenAI, Responses, and xAI use a bearer
+/// token. Anthropic Messages uses `x-api-key`.
+pub async fn fetch_provider_models(
+    base_url: &str,
+    auth: crate::types::AuthStyle,
+    api_key: &str,
+) -> Result<Vec<String>, String> {
+    let url =
+        crate::translate::endpoint_url(base_url, "models").map_err(|error| error.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut request = client.get(url);
+    request = match auth {
+        crate::types::AuthStyle::Bearer => request.bearer_auth(api_key),
+        crate::types::AuthStyle::XApiKey => request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
+    };
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    let body: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
+    let ids = parse_models_payload(&body);
+    if ids.is_empty() {
+        return Err("no models returned".into());
+    }
+    Ok(ids)
 }
 
 pub async fn fetch_model_ids(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {

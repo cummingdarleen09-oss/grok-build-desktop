@@ -43,11 +43,23 @@ impl Preset {
             temperature: None,
             max_tokens: 8192,
             token_field: self.token_field,
-            builtin: true,
+            builtin: self.id == "xai",
             model_hints: self.model_hints.iter().map(|s| (*s).to_string()).collect(),
+            models: listed(self.model, self.model_hints),
             follow_latest: self.follow_latest,
         }
     }
+}
+
+fn listed(model: &str, hints: &[&str]) -> Vec<String> {
+    let mut models = Vec::new();
+    for id in std::iter::once(model).chain(hints.iter().copied()) {
+        let id = id.trim();
+        if !id.is_empty() && !models.iter().any(|existing| existing == id) {
+            models.push(id.to_string());
+        }
+    }
+    models
 }
 
 fn pairs(items: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -156,28 +168,38 @@ pub fn preset_by_id(id: &str) -> Option<&'static Preset> {
     builtin_presets().iter().find(|preset| preset.id == id)
 }
 
+/// Optional templates. They are not written until the user adds one.
+pub fn template_presets() -> Vec<Preset> {
+    builtin_presets()
+        .iter()
+        .copied()
+        .filter(|preset| preset.id != "xai")
+        .collect()
+}
+
 pub fn default_store() -> crate::types::ProviderStore {
     normalize_store(crate::types::ProviderStore {
         active: Some("xai".to_string()),
-        providers: builtin_presets()
-            .iter()
-            .copied()
-            .map(|preset| preset.to_config(preset.id == "xai"))
-            .collect(),
+        providers: vec![preset_by_id("xai").expect("xai preset").to_config(true)],
     })
 }
 
-/// Append any built-in preset the file does not mention yet, so upgrades surface
-/// new providers without erasing custom ones.
+/// Keep Grok built in, turn previously saved vendor rows into custom providers,
+/// and fill each model list. Ids and `env_key` stay so keychain entries still match.
 pub fn normalize_store(mut store: crate::types::ProviderStore) -> crate::types::ProviderStore {
-    for preset in builtin_presets() {
-        if !store
-            .providers
-            .iter()
-            .any(|provider| provider.id == preset.id)
-        {
-            store.providers.push(preset.to_config(preset.id == "xai"));
+    if !store.providers.iter().any(|provider| provider.id == "xai") {
+        if let Some(preset) = preset_by_id("xai") {
+            store.providers.insert(0, preset.to_config(true));
         }
+    }
+    for provider in &mut store.providers {
+        if provider.id == "xai" {
+            provider.builtin = true;
+        } else {
+            provider.builtin = false;
+            provider.follow_latest = false;
+        }
+        fill_model_list(provider);
     }
     let active_missing = store
         .active
@@ -188,4 +210,67 @@ pub fn normalize_store(mut store: crate::types::ProviderStore) -> crate::types::
     }
     crate::xai_models::apply_known_models(&mut store);
     store
+}
+
+fn fill_model_list(provider: &mut crate::types::ProviderConfig) {
+    if provider.models.is_empty() {
+        provider.models = listed(
+            &provider.model,
+            &provider
+                .model_hints
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        );
+    }
+    if provider.model.trim().is_empty() {
+        if let Some(first) = provider.models.first() {
+            provider.model = first.clone();
+        }
+    } else if !provider.models.iter().any(|id| id == &provider.model) {
+        provider.models.insert(0, provider.model.clone());
+    }
+    provider.model_hints = provider.models.clone();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_store_is_grok_only() {
+        let store = default_store();
+        assert_eq!(store.providers.len(), 1);
+        assert_eq!(store.providers[0].id, "xai");
+        assert!(store.providers[0].builtin);
+        assert!(store.providers[0].follow_latest);
+        assert!(store.providers[0].models.iter().any(|id| id == "grok-4.7"));
+    }
+
+    #[test]
+    fn saved_vendor_rows_stay_custom_and_keep_the_key_name() {
+        let mut deepseek = preset_by_id("deepseek").unwrap().to_config(true);
+        deepseek.builtin = true;
+        let store = normalize_store(crate::types::ProviderStore {
+            active: Some("deepseek".into()),
+            providers: vec![deepseek],
+        });
+        let saved = store
+            .providers
+            .iter()
+            .find(|provider| provider.id == "deepseek")
+            .unwrap();
+        assert!(!saved.builtin);
+        assert_eq!(saved.env_key, "DEEPSEEK_API_KEY");
+        assert!(saved.models.iter().any(|id| id == "deepseek-chat"));
+        assert!(saved.models.iter().any(|id| id == "deepseek-reasoner"));
+        assert!(
+            store
+                .providers
+                .iter()
+                .any(|provider| provider.id == "xai" && provider.builtin)
+        );
+        assert!(store.providers.iter().all(|provider| provider.id != "kimi"));
+        assert_eq!(store.active.as_deref(), Some("deepseek"));
+    }
 }

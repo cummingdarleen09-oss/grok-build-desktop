@@ -501,12 +501,9 @@ mod tests {
     #[test]
     fn store_merge_skips_disabled_providers() {
         let mut store = crate::presets::default_store();
-        let deepseek = store
+        store
             .providers
-            .iter_mut()
-            .find(|provider| provider.id == "deepseek")
-            .unwrap();
-        deepseek.enabled = true;
+            .push(preset_by_id("deepseek").unwrap().to_config(true));
         let mut raw = toml::Value::Table(toml::map::Map::new());
         merge_store_presets(&mut raw, &store);
         let providers = raw.get("model_providers").unwrap();

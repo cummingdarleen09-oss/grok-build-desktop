@@ -11,7 +11,7 @@ pub enum ProviderFormat {
     /// Anthropic Messages API (`/v1/messages`).
     #[serde(rename = "anthropic")]
     Anthropic,
-    /// xAI / OpenAI Responses API (`/v1/responses`). Grok 4.x uses this.
+    /// OpenAI Responses API (`/v1/responses`) for any base URL. xAI Grok uses this.
     #[serde(rename = "responses")]
     Responses,
 }
@@ -88,8 +88,8 @@ pub struct ProviderConfig {
     pub format: ProviderFormat,
     pub base_url: String,
     pub model: String,
-    /// Environment variable the CLI should read. The desktop app exports this
-    /// from the keychain when it launches the classic TUI.
+    /// Environment variable the CLI should read. The desktop app keeps the
+    /// secret in the keychain or a private file, not in this struct.
     pub env_key: String,
     #[serde(default)]
     pub env_key_fallbacks: Vec<String>,
@@ -113,9 +113,12 @@ pub struct ProviderConfig {
     /// True for DeepSeek, Kimi, OpenAI, Anthropic, and xAI presets.
     #[serde(default)]
     pub builtin: bool,
-    /// Model ids the settings UI offers as suggestions. Not sent on the wire.
+    /// Model ids the settings UI offers as suggestions. Kept in sync with `models`.
     #[serde(default)]
     pub model_hints: Vec<String>,
+    /// Every model this provider exposes in the composer. `model` is the default.
+    #[serde(default)]
+    pub models: Vec<String>,
     /// When true, `model` tracks the newest general Grok model. A settings pin sets this false.
     #[serde(default)]
     pub follow_latest: bool,
@@ -146,8 +149,8 @@ impl ProviderConfig {
                 "provider id must be letters, numbers, '-' or '_' and cannot be empty".into(),
             );
         }
-        if self.model.trim().is_empty() {
-            return Err("model name is required".into());
+        if self.model.trim().is_empty() && self.models.iter().all(|model| model.trim().is_empty()) {
+            return Err("at least one model is required".into());
         }
         if !(self.base_url.starts_with("https://") || self.base_url.starts_with("http://")) {
             return Err("base URL must start with https:// or http://".into());

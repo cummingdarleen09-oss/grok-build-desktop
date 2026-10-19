@@ -1,17 +1,15 @@
-//! xAI credentials for the desktop preset.
+//! xAI credentials for Official Grok.
 //!
-//! Resolution matches the upstream seam in `xai-grok-shell`'s `resolve_credentials`:
-//! an explicit key, then a `grok login` session, then `XAI_API_KEY`.
-//! The session is read from the same `auth.json` document `xai-grok-login` writes
-//! (`GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json`). Linking that crate
-//! would pull the sampler and the tool stack into the desktop binary, so this
-//! module reads the file format directly.
+//! An OAuth session in the same `auth.json` that `xai-grok-login` writes
+//! (`GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json`) takes priority
+//! over an API key. The desktop window runs that login itself. This module only
+//! reads the file, so the provider crate does not link the login stack.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config_merge::grok_home;
 
@@ -37,6 +35,33 @@ pub struct LoginSnapshot {
     pub api_key: Option<String>,
 }
 
+/// Redacted Official Grok session. Tokens never leave this process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginProfile {
+    pub signed_in: bool,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub expires_at: Option<String>,
+    pub expired: bool,
+    pub has_refresh: bool,
+    pub auth_mode: Option<String>,
+}
+
+impl LoginProfile {
+    pub fn signed_out() -> Self {
+        Self {
+            signed_in: false,
+            email: None,
+            display_name: None,
+            expires_at: None,
+            expired: false,
+            has_refresh: false,
+            auth_mode: None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct StoredAuth {
     #[serde(default)]
@@ -54,11 +79,11 @@ pub fn pick_xai_secret(
     env: &BTreeMap<String, String>,
     login: &LoginSnapshot,
 ) -> Option<(String, XaiSecretSource)> {
-    if let Some(secret) = nonempty(settings_secret) {
-        return Some((secret, XaiSecretSource::Settings));
-    }
     if let Some(secret) = login.session.clone() {
         return Some((secret, XaiSecretSource::Session));
+    }
+    if let Some(secret) = nonempty(settings_secret) {
+        return Some((secret, XaiSecretSource::Settings));
     }
     if let Some(secret) = env_key(env) {
         return Some((secret, XaiSecretSource::Env));
@@ -103,6 +128,18 @@ pub fn load_login_file(path: &Path) -> LoginSnapshot {
         return LoginSnapshot::default();
     };
     snapshot_from_store_json(&text).unwrap_or_default()
+}
+
+pub fn read_login_profile() -> LoginProfile {
+    if let Ok(inline) = std::env::var(GROK_AUTH_ENV) {
+        if let Some(profile) = profile_from_inline(&inline) {
+            return profile;
+        }
+    }
+    let Ok(text) = std::fs::read_to_string(auth_json_path()) else {
+        return LoginProfile::signed_out();
+    };
+    profile_from_store_json(&text).unwrap_or_else(LoginProfile::signed_out)
 }
 
 fn snapshot_from_inline(json: &str) -> Option<LoginSnapshot> {
@@ -160,21 +197,100 @@ fn is_legacy_mode(mode: &str) -> bool {
 }
 
 fn is_expired(auth: &StoredAuth) -> bool {
-    let buffer = Duration::seconds(EARLY_INVALIDATION_SECS);
-    if let Some(expires_at) = auth.expires_at.as_deref().and_then(parse_time) {
-        return Utc::now() >= (expires_at - buffer);
-    }
-    if let Some(create_time) = auth.create_time.as_deref().and_then(parse_time) {
-        let age = Utc::now().signed_duration_since(create_time);
-        return age >= (Duration::days(TOKEN_TTL_DAYS) - buffer);
-    }
-    false
+    is_expired_at(auth.expires_at.as_deref(), auth.create_time.as_deref())
 }
 
 fn parse_time(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|time| time.with_timezone(&Utc))
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredProfile {
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    auth_mode: String,
+    #[serde(default)]
+    create_time: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    first_name: Option<String>,
+    #[serde(default)]
+    last_name: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+}
+
+fn profile_from_inline(json: &str) -> Option<LoginProfile> {
+    let auth: StoredProfile = serde_json::from_str(json).ok()?;
+    profile_from_entry("inline", &auth)
+}
+
+fn profile_from_store_json(json: &str) -> Option<LoginProfile> {
+    let map: BTreeMap<String, StoredProfile> = serde_json::from_str(json).ok()?;
+    let mut sessions: Vec<(String, LoginProfile)> = Vec::new();
+    for (scope, auth) in &map {
+        if let Some(profile) = profile_from_entry(scope, auth) {
+            let stamp = auth.create_time.clone().unwrap_or_default();
+            sessions.push((stamp, profile));
+        }
+    }
+    sessions.sort_by(|left, right| right.0.cmp(&left.0));
+    Some(
+        sessions
+            .into_iter()
+            .next()
+            .map(|(_, profile)| profile)
+            .unwrap_or_else(LoginProfile::signed_out),
+    )
+}
+
+fn profile_from_entry(scope: &str, auth: &StoredProfile) -> Option<LoginProfile> {
+    if scope == API_KEY_SCOPE || auth.auth_mode == "api_key" || is_legacy_mode(&auth.auth_mode) {
+        return None;
+    }
+    if auth.key.trim().is_empty() {
+        return None;
+    }
+    let email = nonempty(auth.email.as_deref());
+    let display_name = person_name(auth.first_name.as_deref(), auth.last_name.as_deref());
+    let auth_mode = nonempty(Some(auth.auth_mode.as_str()));
+    Some(LoginProfile {
+        signed_in: true,
+        email,
+        display_name,
+        expires_at: nonempty(auth.expires_at.as_deref()),
+        expired: is_expired_at(auth.expires_at.as_deref(), auth.create_time.as_deref()),
+        has_refresh: nonempty(auth.refresh_token.as_deref()).is_some(),
+        auth_mode,
+    })
+}
+
+fn person_name(first: Option<&str>, last: Option<&str>) -> Option<String> {
+    let name = [first.unwrap_or(""), last.unwrap_or("")]
+        .into_iter()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    nonempty(Some(name.as_str()))
+}
+
+fn is_expired_at(expires_at: Option<&str>, create_time: Option<&str>) -> bool {
+    let buffer = Duration::seconds(EARLY_INVALIDATION_SECS);
+    if let Some(expires_at) = expires_at.and_then(parse_time) {
+        return Utc::now() >= (expires_at - buffer);
+    }
+    if let Some(create_time) = create_time.and_then(parse_time) {
+        let age = Utc::now().signed_duration_since(create_time);
+        return age >= (Duration::days(TOKEN_TTL_DAYS) - buffer);
+    }
+    false
 }
 
 fn nonempty(value: Option<&str>) -> Option<String> {
@@ -196,9 +312,26 @@ mod tests {
     }
 
     #[test]
-    fn settings_key_beats_session_and_env() {
+    fn oauth_session_beats_settings_key_and_env() {
         let login = LoginSnapshot {
             session: Some("session-token".into()),
+            api_key: Some("login-api-key".into()),
+        };
+        let picked = pick_xai_secret(
+            Some("settings-key"),
+            &env(&[(XAI_API_KEY_ENV, "env-key")]),
+            &login,
+        );
+        assert_eq!(
+            picked,
+            Some(("session-token".into(), XaiSecretSource::Session))
+        );
+    }
+
+    #[test]
+    fn settings_key_beats_env_when_no_session() {
+        let login = LoginSnapshot {
+            session: None,
             api_key: Some("login-api-key".into()),
         };
         let picked = pick_xai_secret(
@@ -279,5 +412,56 @@ mod tests {
         let snapshot = snapshot_from_store_json(json).unwrap();
         assert_eq!(snapshot.session.as_deref(), Some("fresh-session"));
         assert_eq!(snapshot.api_key.as_deref(), Some("stored-api"));
+    }
+
+    #[test]
+    fn profile_reports_the_account_and_hides_tokens() {
+        let json = r#"
+        {
+          "xai::api_key": {"key": "api-secret", "auth_mode": "api_key"},
+          "https://auth.x.ai::client": {
+            "key": "secret-token",
+            "auth_mode": "oidc",
+            "email": "ada@example.com",
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "refresh_token": "refresh-secret",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "create_time": "2026-01-01T00:00:00Z"
+          }
+        }
+        "#;
+        let profile = profile_from_store_json(json).unwrap();
+        assert!(profile.signed_in);
+        assert!(!profile.expired);
+        assert!(profile.has_refresh);
+        assert_eq!(profile.email.as_deref(), Some("ada@example.com"));
+        assert_eq!(profile.display_name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(profile.auth_mode.as_deref(), Some("oidc"));
+        let dumped = serde_json::to_string(&profile).unwrap();
+        assert!(!dumped.contains("secret-token"));
+        assert!(!dumped.contains("refresh-secret"));
+        assert!(!dumped.contains("api-secret"));
+    }
+
+    #[test]
+    fn expired_oauth_session_stays_visible_for_refresh() {
+        let json = r#"
+        {
+          "https://auth.x.ai::client": {
+            "key": "secret-token",
+            "auth_mode": "oidc",
+            "email": "ada@example.com",
+            "expires_at": "2000-01-01T00:00:00Z",
+            "refresh_token": "refresh-secret"
+          }
+        }
+        "#;
+        let profile = profile_from_store_json(json).unwrap();
+        assert!(profile.signed_in);
+        assert!(profile.expired);
+        assert!(profile.has_refresh);
+        let snapshot = snapshot_from_store_json(json).unwrap();
+        assert!(snapshot.session.is_none());
     }
 }

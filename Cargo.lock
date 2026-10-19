@@ -5353,11 +5353,9 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 name = "grok-desktop"
 version = "0.2.0"
 dependencies = [
- "base64 0.22.1",
  "grok-desktop-core",
  "grok-providers",
  "muda",
- "portable-pty",
  "serde",
  "serde_json",
  "tao",
@@ -5369,8 +5367,10 @@ dependencies = [
  "tauri-runtime-wry",
  "tauri-utils",
  "tokio",
- "which",
+ "webbrowser",
  "wry",
+ "xai-grok-config",
+ "xai-grok-login",
 ]
 
 [[package]]
@@ -5381,6 +5381,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "grok-providers",
+ "mermaid-to-svg",
  "regex",
  "serde",
  "serde_json",

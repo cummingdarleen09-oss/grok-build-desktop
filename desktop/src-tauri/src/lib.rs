@@ -1,26 +1,26 @@
 //! Tauri shell around [`grok_desktop_core`].
 //!
-//! The window is the desktop UI (sessions, tools, settings, extensions, and the
-//! classic TUI). Model traffic for the desktop agent goes through
-//! [`grok_providers`]. The original CLI is unchanged and can be opened from the
-//! Terminal page.
+//! The window is the desktop workbench (sessions, projects, media, automations).
+//! Model traffic goes through [`grok_providers`]. Official Grok sign-in uses
+//! [`xai_grok_login`] and stores the session in the same auth file as the CLI.
+//! The CLI still builds as its own binary.
 
-mod pty;
+mod account;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use grok_desktop_core::{
-    AgentEvent, DesktopSettings, ExtensionRecord, Session, SessionSummary, TurnControl,
-    branch_session, create_session, delete_session, discover_extensions, list_sessions,
-    load_session, load_settings, rename_session, run_turn, save_session, save_settings, tr,
+    AgentEvent, Automation, DesktopSettings, ExtensionRecord, MediaFile, Session, SessionSummary,
+    TurnControl, branch_session, create_session, delete_session, discover_extensions, list_media,
+    list_sessions, load_automations, load_classic_session, load_session, load_settings,
+    rename_session, render_mermaid, run_turn, save_automations, save_session, save_settings, tr,
 };
 use grok_providers::{
-    ProviderClient, ProviderConfig, ProviderStore, SecretLocation, SecretStore, Turn, apply_choice,
-    has_login_session, load_or_default_store, normalize_store, refresh_xai_models,
-    save_provider_store, sync_cli_config,
+    ProviderClient, ProviderConfig, ProviderFormat, ProviderStore, SecretLocation, SecretStore,
+    Turn, apply_choice, fetch_provider_models, has_login_session, load_or_default_store,
+    normalize_store, refresh_xai_models, save_provider_store, sync_cli_config,
 };
-use pty::PtySession;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -30,7 +30,6 @@ pub struct AppState {
     cancel: Mutex<Option<Arc<AtomicBool>>>,
     approvals: Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     turn: tokio::sync::Mutex<()>,
-    pty: Mutex<Option<PtySession>>,
 }
 
 #[derive(Serialize)]
@@ -48,8 +47,9 @@ struct Bootstrap {
     sessions: Vec<SessionSummary>,
     extensions: Vec<ExtensionRecord>,
     secrets: Vec<SecretStatus>,
-    grok_binary: Option<String>,
     grok_home: String,
+    user_name: String,
+    automations: Vec<Automation>,
 }
 
 #[derive(Serialize, Clone)]
@@ -109,9 +109,18 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
         sessions: list_sessions()?,
         extensions: discover_extensions(),
         secrets,
-        grok_binary: pty::find_grok_binary().map(|path| path.display().to_string()),
         grok_home: grok_providers::grok_home().display().to_string(),
+        user_name: user_name(),
+        automations: load_automations(),
     })
+}
+
+fn user_name() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "Grok".into())
 }
 
 #[tauri::command]
@@ -224,11 +233,7 @@ fn pick_folder() -> Option<String> {
     {
         match picker_stdout(
             "zenity",
-            &[
-                "--file-selection",
-                "--directory",
-                "--title=Open project",
-            ],
+            &["--file-selection", "--directory", "--title=Open project"],
         ) {
             Ok(path) => path,
             Err(()) => picker_stdout("kdialog", &["--getexistingdirectory", "."])
@@ -240,7 +245,10 @@ fn pick_folder() -> Option<String> {
 
 /// `Ok(None)` is a cancel. `Err(())` means the picker program is not installed.
 fn picker_stdout(program: &str, args: &[&str]) -> Result<Option<String>, ()> {
-    let output = std::process::Command::new(program).args(args).output().map_err(|_| ())?;
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|_| ())?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -257,9 +265,14 @@ async fn send_prompt(
     state: State<'_, AppState>,
     session_id: String,
     text: String,
+    plan: Option<bool>,
+    model: Option<String>,
 ) -> Result<Session, String> {
     let _turn = state.turn.lock().await;
     let mut session = load_session(&session_id)?;
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        session.model = model;
+    }
     let settings = load_settings();
     let store = load_or_default_store();
     let provider_id = if session.provider_id.is_empty() {
@@ -267,12 +280,15 @@ async fn send_prompt(
     } else {
         session.provider_id.clone()
     };
-    let provider = store
+    let mut provider = store
         .providers
         .iter()
         .find(|provider| provider.id == provider_id)
         .cloned()
         .ok_or_else(|| tr(&settings.lang, "no_provider"))?;
+    if !session.model.trim().is_empty() {
+        provider.model = session.model.clone();
+    }
     if !provider.enabled {
         return Err(tr(&settings.lang, "no_provider"));
     }
@@ -294,6 +310,7 @@ async fn send_prompt(
         &text,
         &settings.lang,
         settings.asks_permission(),
+        plan.unwrap_or(false),
         &settings.disabled_tools,
         &state.client,
         &TurnControl { cancel },
@@ -340,7 +357,11 @@ fn resolve_approval(state: State<'_, AppState>, id: String, approved: bool) -> R
 }
 
 #[tauri::command]
-async fn test_provider(state: State<'_, AppState>, id: String) -> Result<String, String> {
+async fn test_provider(
+    state: State<'_, AppState>,
+    id: String,
+    model: Option<String>,
+) -> Result<String, String> {
     let settings = load_settings();
     let store = load_or_default_store();
     let mut provider = store
@@ -348,6 +369,9 @@ async fn test_provider(state: State<'_, AppState>, id: String) -> Result<String,
         .into_iter()
         .find(|provider| provider.id == id)
         .ok_or_else(|| tr(&settings.lang, "no_provider"))?;
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        provider.model = model;
+    }
     let api_key = state
         .secrets
         .resolve(&provider, None)?
@@ -366,46 +390,108 @@ async fn test_provider(state: State<'_, AppState>, id: String) -> Result<String,
 }
 
 #[tauri::command]
-fn start_terminal(
-    app: AppHandle,
+fn set_chat_model(id: String, provider_id: String, model: String) -> Result<Session, String> {
+    let mut session = load_session(&id)?;
+    session.provider_id = provider_id;
+    session.model = model;
+    save_session(&session)?;
+    Ok(session)
+}
+
+#[tauri::command]
+async fn fetch_models(
     state: State<'_, AppState>,
-    cols: u16,
-    rows: u16,
-) -> Result<String, String> {
-    let (session, binary) = PtySession::start(app, cols, rows, &state.secrets)?;
-    let mut guard = state.pty.lock().expect("pty lock");
-    if let Some(mut existing) = guard.take() {
-        existing.kill();
+    id: String,
+    base_url: String,
+    format: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    let format = match format.as_str() {
+        "anthropic" => ProviderFormat::Anthropic,
+        "responses" => ProviderFormat::Responses,
+        _ => ProviderFormat::OpenAi,
+    };
+    let auth = if format == ProviderFormat::Anthropic {
+        grok_providers::AuthStyle::XApiKey
+    } else {
+        grok_providers::AuthStyle::Bearer
+    };
+    let key = if api_key.trim().is_empty() {
+        let store = load_or_default_store();
+        match store
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == id)
+        {
+            Some(provider) => state.secrets.resolve(&provider, None)?.unwrap_or_default(),
+            None => String::new(),
+        }
+    } else {
+        api_key
+    };
+    if key.trim().is_empty() {
+        return Err("missing api key".into());
     }
-    *guard = Some(session);
-    Ok(binary)
+    fetch_provider_models(&base_url, auth, &key).await
 }
 
 #[tauri::command]
-fn write_terminal(state: State<'_, AppState>, data: String) -> Result<(), String> {
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
-        .map_err(|error| error.to_string())?;
-    let mut guard = state.pty.lock().expect("pty lock");
-    let session = guard
-        .as_mut()
-        .ok_or_else(|| "terminal is not running".to_string())?;
-    session.write(&bytes)
+fn open_classic(id: String) -> Result<Session, String> {
+    load_classic_session(&id)
 }
 
 #[tauri::command]
-fn resize_terminal(state: State<'_, AppState>, cols: u16, rows: u16) -> Result<(), String> {
-    let guard = state.pty.lock().expect("pty lock");
-    let session = guard
-        .as_ref()
-        .ok_or_else(|| "terminal is not running".to_string())?;
-    session.resize(cols, rows)
+fn render_diagram(source: String, dark: bool) -> Result<String, String> {
+    render_mermaid(&source, dark)
 }
 
 #[tauri::command]
-fn stop_terminal(state: State<'_, AppState>) {
-    if let Some(mut session) = state.pty.lock().expect("pty lock").take() {
-        session.kill();
-    }
+fn project_media(cwd: String) -> Vec<MediaFile> {
+    list_media(&cwd)
+}
+
+#[tauri::command]
+fn load_automation_list() -> Vec<Automation> {
+    load_automations()
+}
+
+#[tauri::command]
+fn store_automations(list: Vec<Automation>) -> Result<Vec<Automation>, String> {
+    save_automations(&list)?;
+    Ok(list)
+}
+
+#[derive(Serialize)]
+struct GitInfo {
+    current: String,
+    branches: Vec<String>,
+}
+
+#[tauri::command]
+fn git_info(cwd: String) -> GitInfo {
+    let run = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&cwd)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    };
+    let current = run(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "main".into());
+    let branches = run(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .map(|text| {
+            text.lines()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec![current.clone()]);
+    GitInfo { current, branches }
 }
 
 pub fn run() {
@@ -417,7 +503,6 @@ pub fn run() {
             cancel: Mutex::new(None),
             approvals: Mutex::new(std::collections::HashMap::new()),
             turn: tokio::sync::Mutex::new(()),
-            pty: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
@@ -435,10 +520,20 @@ pub fn run() {
             cancel_prompt,
             resolve_approval,
             test_provider,
-            start_terminal,
-            write_terminal,
-            resize_terminal,
-            stop_terminal,
+            set_chat_model,
+            fetch_models,
+            open_classic,
+            account::grok_account,
+            account::grok_login,
+            account::grok_login_cancel,
+            account::grok_logout,
+            account::grok_refresh,
+            account::open_external_url,
+            render_diagram,
+            project_media,
+            load_automation_list,
+            store_automations,
+            git_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running grok desktop");

@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use grok_providers::{ProviderClient, ProviderConfig, ProviderEvent, StopReason, Turn};
 use serde::Serialize;
 
+use crate::mcp::McpPool;
 use crate::sessions::{ChatMessage, Session, StoredTool, conversation_turns, touch};
 use crate::text::tr;
 use crate::tools::{ToolOutput, execute_tool, needs_approval, tool_defs};
@@ -57,6 +58,7 @@ pub async fn run_turn<F, Fut>(
     user_text: &str,
     lang: &str,
     ask: bool,
+    plan: bool,
     disabled_tools: &[String],
     client: &ProviderClient,
     control: &TurnControl,
@@ -67,7 +69,21 @@ where
     F: FnMut(String, String, String) -> Fut,
     Fut: Future<Output = bool>,
 {
-    let tools = tool_defs(lang, disabled_tools);
+    let mut tools = tool_defs(lang, disabled_tools);
+    if plan {
+        tools.retain(|tool| {
+            !matches!(
+                tool.name.as_str(),
+                "write_file" | "search_replace" | "run_terminal"
+            )
+        });
+    }
+    let mut mcp = if plan {
+        McpPool::empty()
+    } else {
+        McpPool::connect().await
+    };
+    tools.extend(mcp.tool_defs());
     let user = ChatMessage {
         id: new_id(),
         role: "user".into(),
@@ -108,8 +124,10 @@ where
     drive(
         session,
         lang,
+        plan,
         ask,
         &tools,
+        &mut mcp,
         control,
         &mut on_event,
         &mut approve,
@@ -122,8 +140,10 @@ where
 async fn drive<F, Fut, Open, OpenFut>(
     session: &mut Session,
     lang: &str,
+    plan: bool,
     ask: bool,
     tools: &[grok_providers::ToolDef],
+    mcp: &mut McpPool,
     control: &TurnControl,
     on_event: &mut impl FnMut(AgentEvent),
     approve: &mut F,
@@ -144,7 +164,7 @@ where
             on_event(AgentEvent::Done);
             return Ok(());
         }
-        let turns = transcript(session, lang);
+        let turns = transcript(session, lang, plan);
         let mut stream = open_stream(&turns).await?;
         let mut text = String::new();
         let mut reasoning = String::new();
@@ -236,7 +256,7 @@ where
         }
         let cwd = Path::new(&session.cwd);
         for call in &mut calls {
-            if ask && needs_approval(&call.name) {
+            if ask && (needs_approval(&call.name) || call.name.starts_with("mcp__")) {
                 on_event(AgentEvent::ApprovalNeeded {
                     id: call.id.clone(),
                     name: call.name.clone(),
@@ -273,7 +293,11 @@ where
                 arguments: call.arguments.clone(),
             });
             let ToolOutput { content, is_error } =
-                execute_tool(&call.name, &call.arguments, cwd).await;
+                if let Some(output) = mcp.call(&call.name, &call.arguments).await {
+                    output
+                } else {
+                    execute_tool(&call.name, &call.arguments, cwd).await
+                };
             call.output = Some(content.clone());
             call.is_error = is_error;
             on_event(AgentEvent::ToolFinished {
@@ -310,23 +334,30 @@ where
     Ok(())
 }
 
-fn transcript(session: &Session, lang: &str) -> Vec<Turn> {
-    let mut turns = vec![Turn::system(system_prompt(&session.cwd, lang))];
+fn transcript(session: &Session, lang: &str, plan: bool) -> Vec<Turn> {
+    let mut turns = vec![Turn::system(system_prompt(&session.cwd, lang, plan))];
     turns.extend(conversation_turns(&session.messages));
     turns
 }
 
-fn system_prompt(cwd: &str, lang: &str) -> String {
+fn system_prompt(cwd: &str, lang: &str, plan: bool) -> String {
     let language = if lang.to_ascii_lowercase().starts_with("zh") {
         "Chinese (zh-CN)"
     } else {
         "English"
     };
+    let plan_note = if plan {
+        " The user turned on Plan New Idea. Do not edit files or run commands. Reply with a short numbered plan and wait for the user to leave plan mode."
+    } else {
+        ""
+    };
     format!(
         "You are Grok Desktop, a coding agent working in {cwd}. \
 Use tools to inspect and change the project. Prefer search_replace for edits of existing files. \
 Do not invent file contents. Writes and shell commands may wait for the user to approve them. \
-Reply in {language}."
+MCP tools named mcp__<server>__<tool> come from the user's stdio MCP servers. \
+When a reply contains a diagram, use a ```mermaid fenced block. \
+Reply in {language}.{plan_note}"
     )
 }
 
@@ -377,7 +408,9 @@ mod tests {
             &mut session,
             "en",
             false,
+            false,
             &tool_defs("en", &[]),
+            &mut McpPool::empty(),
             &control,
             &mut |event| events.push(event),
             &mut |_id, _name, _args| async { true },
