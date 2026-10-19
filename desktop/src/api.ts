@@ -66,6 +66,16 @@ export interface GitInfo {
   branches: string[];
 }
 
+export interface GrokAccount {
+  signedIn: boolean;
+  email: string | null;
+  displayName: string | null;
+  expiresAt: string | null;
+  expired: boolean;
+  hasRefresh: boolean;
+  authMode: string | null;
+}
+
 export interface StoredTool {
   id: string;
   name: string;
@@ -234,7 +244,7 @@ function seed(): Bootstrap {
   memorySessions.set(scratch.id, scratch);
   const classic: SessionSummary = {
     id: "classic-demo",
-    title: "TUI · 旧会话",
+    title: "CLI · 旧会话",
     model: "grok-4",
     provider_id: "classic",
     cwd: project,
@@ -243,7 +253,7 @@ function seed(): Bootstrap {
   };
   memorySessions.set("classic-demo", {
     id: "classic-demo",
-    title: "TUI · 旧会话",
+    title: "CLI · 旧会话",
     cwd: project,
     provider_id: "classic",
     model: "grok-4",
@@ -661,4 +671,58 @@ export async function gitInfo(cwd: string): Promise<GitInfo> {
 
 export function desktopShell(): boolean {
   return inTauri();
+}
+
+const signedOutAccount: GrokAccount = {
+  signedIn: false,
+  email: null,
+  displayName: null,
+  expiresAt: null,
+  expired: false,
+  hasRefresh: false,
+  authMode: null,
+};
+
+function browserAccount(): GrokAccount {
+  const mock = (globalThis as { __GROK_MOCK_ACCOUNT?: GrokAccount }).__GROK_MOCK_ACCOUNT;
+  return mock ?? signedOutAccount;
+}
+
+export async function grokAccount(): Promise<GrokAccount> {
+  if (!inTauri()) return browserAccount();
+  return invoke<GrokAccount>("grok_account");
+}
+
+export async function grokLogin(onUrl?: (url: string) => void): Promise<GrokAccount> {
+  if (!inTauri()) return browserAccount();
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<string>("grok-login-url", (event) => onUrl?.(event.payload));
+  try {
+    return await invoke<GrokAccount>("grok_login");
+  } finally {
+    unlisten();
+  }
+}
+
+export async function grokLoginCancel(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke("grok_login_cancel");
+}
+
+export async function grokLogout(): Promise<GrokAccount> {
+  if (!inTauri()) return signedOutAccount;
+  return invoke<GrokAccount>("grok_logout");
+}
+
+export async function grokRefresh(): Promise<GrokAccount> {
+  if (!inTauri()) return browserAccount();
+  return invoke<GrokAccount>("grok_refresh");
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!inTauri()) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  await invoke("open_external_url", { url });
 }

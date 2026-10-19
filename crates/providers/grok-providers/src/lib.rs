@@ -34,7 +34,7 @@ pub use stream::{
 };
 pub use translate::{anthropic_request_body, endpoint_url, openai_request_body};
 pub use types::*;
-pub use xai_auth::{has_login_session, pick_xai_secret};
+pub use xai_auth::{has_login_session, pick_xai_secret, read_login_profile, LoginProfile};
 pub use xai_models::{
     apply_choice, fetch_provider_models, refresh_xai_models, refresh_xai_models_blocking,
 };

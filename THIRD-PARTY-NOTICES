@@ -1,9 +1,11 @@
 THIRD-PARTY NOTICES
 ================================================================================
 
-Workbench layout, automation records, session/project/media ideas, and the
-Settings → Account → Custom providers panel in the desktop UI are adapted
-from grok-app:
+Workbench layout, automation records, session/project/media ideas, the
+Settings → Account → Custom providers panel, and the Official Grok sign-in
+card (browser login, redacted profile, log out) in the desktop UI are adapted
+from grok-app. Sign-in itself calls this repo's `xai-grok-login` crate rather
+than a separate login process:
 
   Source:    https://github.com/RongleCat/grok-app
   License:   MIT

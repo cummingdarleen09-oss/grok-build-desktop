@@ -1,4 +1,4 @@
-//! Project media the workbench can preview without embedding the classic TUI.
+//! Project media the workbench can preview.
 
 use std::path::{Path, PathBuf};
 

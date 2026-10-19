@@ -1,12 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  type GrokAccount,
   type Provider,
   type ProviderFormat,
   type ProviderStore,
   type SecretStatus,
   type Settings,
   clearSecret,
+  desktopShell,
   fetchModels,
+  grokAccount,
+  grokLogin,
+  grokLoginCancel,
+  grokLogout,
+  grokRefresh,
+  openExternalUrl,
   providerModels,
   providerTemplates,
   saveProviders,
@@ -341,7 +349,7 @@ export function ProvidersPanel(props: {
             </div>
           )}
           {mode === "official" && grok && (
-            <div className="prov-detail">
+            <div className="prov-detail" data-testid="official-grok">
               <div className="prov-detail__head">
                 <div>
                   <h3>{t("prov.officialName")}</h3>
@@ -349,6 +357,7 @@ export function ProvidersPanel(props: {
                 </div>
                 {active === "xai" ? <span className="prov-badge">{t("prov.active")}</span> : <button type="button" className="primary" onClick={() => void useProvider("xai")}>{t("prov.useThis")}</button>}
               </div>
+              <OfficialAccount t={t} setError={props.setError} />
               <label className="checks"><input type="checkbox" checked={grok.follow_latest} onChange={(event) => void pinGrok(event.target.checked, grok.model)} />{t("settings.latest")}</label>
               <p className="hint">{t("settings.latestHint")}</p>
               <label className="field">{t("settings.model")}
@@ -440,6 +449,132 @@ export function ProvidersPanel(props: {
         </div>
       </div>
     </section>
+  );
+}
+
+function OfficialAccount(props: { t: (key: Key) => string; setError: (error: string | null) => void }) {
+  const { t } = props;
+  const [account, setAccount] = useState<GrokAccount | null>(null);
+  const [phase, setPhase] = useState<"idle" | "working">("idle");
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      try {
+        let next = await grokAccount();
+        if (stop) return;
+        if (next.signedIn && next.expired && next.hasRefresh && desktopShell()) {
+          try {
+            next = await grokRefresh();
+          } catch (reason) {
+            if (stop) return;
+            setFailed(true);
+            setMessage(String(reason));
+          }
+        }
+        if (!stop) setAccount(next);
+      } catch (reason) {
+        if (stop) return;
+        setFailed(true);
+        setMessage(String(reason));
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  async function onLogin() {
+    setFailed(false);
+    setMessage(null);
+    setLoginUrl(null);
+    if (!desktopShell()) {
+      setFailed(true);
+      setMessage(t("prov.loginDesktopOnly"));
+      return;
+    }
+    setPhase("working");
+    try {
+      const next = await grokLogin(setLoginUrl);
+      setAccount(next);
+      setMessage(next.signedIn ? t("prov.loginOk") : t("prov.signedOut"));
+      setFailed(!next.signedIn);
+    } catch (reason) {
+      setFailed(true);
+      setMessage(String(reason));
+    } finally {
+      setPhase("idle");
+    }
+  }
+
+  async function onLogout() {
+    setFailed(false);
+    setMessage(null);
+    setPhase("working");
+    try {
+      setAccount(await grokLogout());
+      setMessage(t("prov.logoutOk"));
+    } catch (reason) {
+      setFailed(true);
+      setMessage(String(reason));
+      props.setError(String(reason));
+    } finally {
+      setPhase("idle");
+    }
+  }
+
+  async function onRefresh() {
+    setFailed(false);
+    setMessage(null);
+    setPhase("working");
+    try {
+      const next = await grokRefresh();
+      setAccount(next);
+      setMessage(t("prov.refreshOk"));
+    } catch (reason) {
+      setFailed(true);
+      setMessage(String(reason));
+    } finally {
+      setPhase("idle");
+    }
+  }
+
+  const who = account?.displayName || account?.email;
+  return (
+    <div className="prov-account" data-testid="grok-account">
+      {account?.signedIn ? (
+        <>
+          <div className="prov-account__name" data-testid="grok-account-name">{t("prov.signedIn")}{who ? ` · ${who}` : ""}</div>
+          {account.email && account.displayName && <p className="hint">{account.email}</p>}
+          {account.expired && <p className="prov-error" role="alert">{t("prov.expired")}</p>}
+          <div className="prov-form__actions">
+            <button type="button" className="ghost" data-testid="grok-refresh" disabled={phase === "working"} onClick={() => void onRefresh()}>{t("prov.refresh")}</button>
+            <button type="button" className="ghost" data-testid="grok-logout" disabled={phase === "working"} onClick={() => void onLogout()}>{t("prov.logout")}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="prov-account__name">{t("prov.signedOut")}</div>
+          <p className="hint">{t("prov.loginHint")}</p>
+          <div className="prov-form__actions">
+            {phase === "working" ? (
+              <button type="button" className="ghost" onClick={() => void grokLoginCancel()}>{t("prov.loginCancel")}</button>
+            ) : (
+              <button type="button" className="primary" data-testid="grok-login" onClick={() => void onLogin()}>{t("prov.login")}</button>
+            )}
+          </div>
+          {phase === "working" && <p className="hint">{t("prov.loginWorking")}</p>}
+        </>
+      )}
+      {loginUrl && (
+        <button type="button" className="prov-link" onClick={() => void openExternalUrl(loginUrl).catch((reason: unknown) => { setFailed(true); setMessage(String(reason)); })}>{t("prov.loginUrl")}</button>
+      )}
+      <p className="hint">{t("prov.oauthFirst")}</p>
+      {message && <p className={failed ? "prov-error" : "hint"} role={failed ? "alert" : "status"}>{message}</p>}
+    </div>
   );
 }
 

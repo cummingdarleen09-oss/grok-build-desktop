@@ -36,7 +36,7 @@ pub struct Session {
     pub id: String,
     pub title: String,
     /// Project folder. This is the working directory the agent operates in,
-    /// the same key the classic TUI uses under `~/.grok/sessions/<encoded cwd>`.
+    /// the same key the CLI uses under `~/.grok/sessions/<encoded cwd>`.
     pub cwd: String,
     pub provider_id: String,
     pub model: String,
@@ -107,9 +107,9 @@ pub fn load_session(id: &str) -> Result<Session, String> {
     load_session_in(&grok_providers::grok_home(), id)
 }
 
-/// Read a classic TUI session as a desktop transcript.
+/// Read a CLI session as a desktop transcript.
 ///
-/// The desktop app no longer embeds the TUI. Text chunks in `updates.jsonl`
+/// Text chunks in `updates.jsonl`
 /// are shown read-only. Sessions without those chunks still open, with an
 /// empty message list, so the sidebar entry is not a dead end.
 pub fn load_classic_session(id: &str) -> Result<Session, String> {

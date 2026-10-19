@@ -14,6 +14,9 @@ grok-desktop-core = { workspace = true }
 grok-providers = { workspace = true, features = ["keyring"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+webbrowser = { workspace = true }
+xai-grok-config = { workspace = true }
+xai-grok-login = { workspace = true }
 # Pinned to the tauri 2.10.3 release set. Newer patch versions of
 # tauri-runtime, wry, and tauri-macros do not compile together.
 tauri = { version = "=2.10.3", features = [] }

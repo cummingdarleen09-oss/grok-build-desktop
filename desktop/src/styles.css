@@ -95,7 +95,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 }
 .repo-head span { flex: 1; }
 .repo-filter { margin: 0 8px 6px; }
-.repo-filter input, .field input, .field textarea, .field select, .composer-box textarea {
+.repo-filter input, .field input:not([type="radio"]):not([type="checkbox"]), .field textarea, .field select, .composer-box textarea {
   width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 8px;
 }
 .repos { overflow: auto; min-height: 0; padding: 0 8px 8px; }
@@ -229,9 +229,14 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .prov-form__head { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .prov-form__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .prov-field--full { grid-column: 1 / -1; }
-.prov-formats { display: flex; flex-direction: column; gap: 6px; }
-.prov-formats label { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.prov-formats { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.prov-formats label { display: inline-flex; width: auto; max-width: 100%; justify-content: flex-start; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.prov-formats input[type="radio"] { width: 1em; height: 1em; flex: none; margin: 0; accent-color: currentColor; }
 .prov-formats label.on { background: var(--active); }
+.prov-account { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.prov-account__name { font-weight: 650; }
+.prov-error { color: var(--danger); margin: 0; }
+.prov-link { color: var(--text); text-decoration: underline; padding: 0; }
 .prov-key-row, .prov-models__add, .prov-form__actions, .prov-remote, .prov-presets { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .prov-presets { margin-top: 10px; }
 .prov-presets__chip { border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; display: inline-flex; gap: 6px; align-items: center; }

@@ -88,8 +88,8 @@ pub struct ProviderConfig {
     pub format: ProviderFormat,
     pub base_url: String,
     pub model: String,
-    /// Environment variable the CLI should read. The desktop app exports this
-    /// from the keychain when it launches the classic TUI.
+    /// Environment variable the CLI should read. The desktop app keeps the
+    /// secret in the keychain or a private file, not in this struct.
     pub env_key: String,
     #[serde(default)]
     pub env_key_fallbacks: Vec<String>,

@@ -5367,7 +5367,10 @@ dependencies = [
  "tauri-runtime-wry",
  "tauri-utils",
  "tokio",
+ "webbrowser",
  "wry",
+ "xai-grok-config",
+ "xai-grok-login",
 ]
 
 [[package]]

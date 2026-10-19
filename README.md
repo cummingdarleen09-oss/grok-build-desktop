@@ -1,6 +1,6 @@
 # Grok Desktop
 
-A desktop fork of [grok-build](https://github.com/xai-org/grok-build) (Apache-2.0, Copyright 2023-2026 SpaceXAI). The original CLI and fullscreen TUI still build from this tree. This fork adds a native desktop window and a pluggable layer for third-party model providers.
+A desktop fork of [grok-build](https://github.com/xai-org/grok-build) (Apache-2.0, Copyright 2023-2026 SpaceXAI). The original CLI still builds from this tree and ships in releases. This fork adds a native desktop window and a pluggable layer for third-party model providers.
 
 Upstream baseline: git `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`. The monorepo snapshot is recorded in [`SOURCE_REV`](SOURCE_REV). The original project README is preserved as [`UPSTREAM_README.md`](UPSTREAM_README.md). License: [`LICENSE`](LICENSE). Third-party notices: [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES).
 
@@ -11,15 +11,15 @@ Upstream baseline: git `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`. The monorepo 
 - **Grok Desktop** (`grok-desktop`): a Tauri 2 window (Windows, macOS, Linux) with chat sessions, file and shell tools, extension discovery, keyboard shortcuts, and settings in English and Chinese (zh-CN).
 - **Projects**: every desktop conversation belongs to a project folder (the working directory the agent uses). The sidebar lists those folders as repositories. Add a folder with the native picker, switch projects, and create, rename, or delete conversations inside the selected one. New chats use the selected project. Sessions are stored at `$GROK_HOME/desktop-sessions/<encoded-cwd>/`, the same directory encoding the CLI uses under `~/.grok/sessions/<encoded-cwd>/`. CLI sessions for that folder open read-only in the chat view.
 - **Branches**: "Branch from here" / "从这里分支" copies messages `1..N` into a new conversation (same project, provider, and model) and leaves the original untouched. Editing a past user message and resending starts a branch that continues from the edited text. A branch point in the middle of a tool-call round keeps finished tool results and drops calls that never received output, so the model sees exactly that prefix.
-- **Workbench**: the window follows the Cursor desktop layout (new chat, search, automations, customize, repository tree) and the workbench ideas in [grok-app](https://github.com/RongleCat/grok-app) (MIT, Copyright (c) 2026 RongleCat): sessions, a kanban of chats, project media preview, and scheduled automations. Light and dark themes. The classic TUI is not embedded; `xai-grok-pager` remains a separate release binary.
+- **Workbench**: the window follows the Cursor desktop layout (new chat, search, automations, customize, repository tree) and the workbench ideas in [grok-app](https://github.com/RongleCat/grok-app) (MIT, Copyright (c) 2026 RongleCat): sessions, a kanban of chats, project media preview, and scheduled automations. Light and dark themes. `xai-grok-pager` remains a separate release binary.
 - **MCP and diagrams**: stdio MCP servers from `config.toml` are listed and called during a desktop turn. Mermaid fences render with the vendored `mermaid-to-svg` engine. Plan mode withholds edits and shell commands.
-- **Providers** (`grok-providers`): any number of user-defined providers. Each one has a display name, one of three API formats (Anthropic Messages, OpenAI Chat Completions, OpenAI Responses API), a base URL, a keychain API key, and a model list. DeepSeek, Moonshot Kimi, OpenAI, and Claude are optional templates, not a fixed vendor list. Grok stays built in and follows the newest model by default. The Responses request is the generic OpenAI shape against whatever base URL you set. API keys go to the OS keychain when it is available, otherwise to a `0600` file. They are never written into git or into `config.toml`. A `grok login` session is reused for Grok.
+- **Providers** (`grok-providers`): any number of user-defined providers. Each one has a display name, one of three API formats (Anthropic Messages, OpenAI Chat Completions, OpenAI Responses API), a base URL, a keychain API key, and a model list. DeepSeek, Moonshot Kimi, OpenAI, and Claude are optional templates, not a fixed vendor list. Grok stays built in and follows the newest model by default. Sign in from Settings → Custom providers → Official Grok. **Login with Grok** opens the system browser for the same xAI OAuth loopback flow the CLI uses (`xai-grok-login`, same client id) and stores the session in the same `auth.json` (`GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json`). Log out and token refresh run in the app. An API key still works; when a session is present it is used first. The Responses request is the generic OpenAI shape against whatever base URL you set. API keys go to the OS keychain when it is available, otherwise to a `0600` file. They are never written into git or into `config.toml`.
 
 ## Architecture
 
 ```
 desktop/                  React + Vite UI (zh-CN / en)
-desktop/src-tauri/        Tauri 2 shell (no embedded TUI)
+desktop/src-tauri/        Tauri 2 shell (in-app Grok sign-in)
 crates/desktop/grok-desktop-core/   sessions, tools, agent loop
 crates/providers/grok-providers/    translation, SSE, presets, secrets, CLI merge
 crates/codegen/xai-grok-shell/      upstream agent; loads providers.toml + env presets
@@ -72,6 +72,8 @@ cargo build -p grok-desktop
 ./target/debug/grok-desktop
 ```
 
+Official Grok sign-in links `xai-grok-login`, so this build needs `protoc` on `PATH` (or `PROTOC`), the same compiler the CLI build uses.
+
 The UI dev server (mock data when it is not inside the Tauri window) is:
 
 ```sh
@@ -96,7 +98,7 @@ cd desktop && npx tauri build
 
 Pin the Tauri crates to the 2.10.3 set already listed in `desktop/src-tauri/Cargo.toml`. The published `tauri-cli` / `@tauri-apps/cli` line stops at 2.10.1. `@tauri-apps/api` is pinned to 2.10.1 so its major.minor matches the Rust `tauri` crate; the CLI refuses to bundle when they differ. Newer patch releases of `tauri-runtime`, `wry`, and `tauri-macros` do not compile together.
 
-## Build and run the original CLI / TUI
+## Build the CLI binary
 
 ```sh
 export PROTOC=/path/to/protoc   # only if `bin/protoc` cannot run via dotslash
@@ -104,7 +106,7 @@ cargo build -p xai-grok-pager-bin
 ./target/debug/xai-grok-pager
 ```
 
-The desktop window does not embed that TUI. Run the binary above, or the release asset named `grok-<target>`, when you want the classic pager.
+The release asset named `grok-<target>` is this same binary.
 
 ## Downloads
 
@@ -190,7 +192,7 @@ Default provider for new desktop chats. Base URL `https://api.x.ai/v1`. The wire
 
 The default model is not a hard-coded version.
 
-- On desktop launch, if a settings key, a `grok login` session, or `XAI_API_KEY` is available, the app calls `GET https://api.x.ai/v1/models`.
+- On desktop launch, if an OAuth session, a settings key, or `XAI_API_KEY` is available, the app calls `GET https://api.x.ai/v1/models`.
 - It picks the highest **decimal** version among ids shaped like `grok-<number>` (`4.7` outranks `4.20` and `4.6`, which matches xAI's lineup: Grok 4.7 is newer than the 4.20 series).
 - Suffix tokens `mini`, `vision`, `image`, `imagine`, `video`, `voice`, `audio`, `tts`, `stt`, and `embed` are skipped unless every returned id is one of those. An unsuffixed id wins a tie (`grok-4.7` before `grok-4.7-fast`).
 - The list is cached at `~/.grok/xai-model-cache.json`. The desktop app refreshes it on every launch. The cache is treated as fresh for 6 hours for the CLI.
@@ -200,10 +202,10 @@ The default model is not a hard-coded version.
 
 `grok-4.7` was confirmed on 2026-10-19 from the public docs: [models](https://docs.x.ai/docs/models) and [Grok 4.7](https://docs.x.ai/developers/grok-4-7) (model id `grok-4.7`, 500k context, Responses API, page updated 2026-10-10). Upstream `crates/codegen/xai-grok-models/default_models.json` in this snapshot still bakes `grok-4.6` as its default and also lists `grok-4.5`. `grok-4.7` is not in that file; it does appear as a fixture id in upstream tests.
 
-Credential order for this preset: a key saved in Settings (keychain or the `0600` file), then the `grok login` session (`GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json`), then `XAI_API_KEY`, then `GROK_CODE_XAI_API_KEY`, then the `xai::api_key` entry in `auth.json`. The synced CLI table uses `api_backend = "responses"` and does not set `env_key`, so upstream's own fallback still prefers a login session over `XAI_API_KEY`.
+Credential order for Official Grok: the OAuth session in `auth.json` when one is present, then a key saved in Settings (keychain or the `0600` file), then `XAI_API_KEY`, then `GROK_CODE_XAI_API_KEY`, then the `xai::api_key` entry in `auth.json`. The desktop app writes that session itself. The synced CLI table uses `api_backend = "responses"` and does not set `env_key`, so the CLI's own fallback also prefers a login session over `XAI_API_KEY`.
 
 ```sh
-export XAI_API_KEY=xai-...                 # optional when `grok login` already succeeded
+export XAI_API_KEY=xai-...                 # optional when an OAuth session is already stored
 export XAI_BASE_URL=https://api.x.ai/v1   # optional
 export XAI_MODEL=grok-4.5                 # optional pin; omit to follow latest
 cargo run -p grok-providers -- refresh-models
@@ -292,6 +294,6 @@ cargo build -p xai-grok-pager-bin
 
 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) builds the desktop app and runs the new tests on Linux, and builds the desktop app on macOS and Windows. The full upstream CLI is built locally with the command above; it is large and needs `protoc`.
 
-## What is not a second copy of the TUI
+## Desktop chat and the CLI
 
-The desktop chat is a new agent loop with the six tools listed above, plus stdio MCP tools and Mermaid diagrams. It does not embed the classic TUI. Voice input, the sandbox policy engine, ACP, hooks, and HTTP MCP stay on `xai-grok-pager`. The desktop loop runs one turn at a time and asks before writes and shell commands unless Settings is set to auto. Model name defaults are suggestions; change them if your account uses a different id. Scheduled automations fire while the window is open; they do not run after you quit.
+The desktop chat is a new agent loop with the six tools listed above, plus stdio MCP tools and Mermaid diagrams. Voice input, the sandbox policy engine, ACP, hooks, and HTTP MCP stay on `xai-grok-pager`. The desktop loop runs one turn at a time and asks before writes and shell commands unless Settings is set to auto. Model name defaults are suggestions; change them if your account uses a different id. Scheduled automations fire while the window is open; they do not run after you quit.

@@ -1,8 +1,11 @@
 //! Tauri shell around [`grok_desktop_core`].
 //!
 //! The window is the desktop workbench (sessions, projects, media, automations).
-//! Model traffic goes through [`grok_providers`]. The original CLI still builds
-//! as its own binary and is not embedded in this window.
+//! Model traffic goes through [`grok_providers`]. Official Grok sign-in uses
+//! [`xai_grok_login`] and stores the session in the same auth file as the CLI.
+//! The CLI still builds as its own binary.
+
+mod account;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -520,6 +523,12 @@ pub fn run() {
             set_chat_model,
             fetch_models,
             open_classic,
+            account::grok_account,
+            account::grok_login,
+            account::grok_login_cancel,
+            account::grok_logout,
+            account::grok_refresh,
+            account::open_external_url,
             render_diagram,
             project_media,
             load_automation_list,
