@@ -79,6 +79,15 @@ impl SecretStore {
         if let Some(explicit) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
             return Ok(Some(explicit.to_string()));
         }
+        if provider.id == "xai" {
+            let stored = self.get(&provider.id)?;
+            let env = std::env::vars().collect();
+            let login = crate::xai_auth::current_login();
+            return Ok(
+                crate::xai_auth::pick_xai_secret(stored.as_deref(), &env, &login)
+                    .map(|(secret, _source)| secret),
+            );
+        }
         for name in provider.env_names() {
             if let Ok(value) = std::env::var(name) {
                 let value = value.trim().to_string();

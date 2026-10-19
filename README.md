@@ -10,7 +10,7 @@ Upstream baseline: git `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`. The monorepo 
 
 - **Grok Desktop** (`grok-desktop`): a Tauri 2 window (Windows, macOS, Linux) with chat sessions, file and shell tools, extension discovery, keyboard shortcuts, and settings in English and Chinese (zh-CN).
 - **Classic TUI inside the window**: the Terminal page starts the original `xai-grok-pager` binary on a PTY, so slash commands, plugins, hooks, MCP, sandboxing, and the rest of the upstream TUI stay available.
-- **Providers** (`grok-providers`): OpenAI-compatible Chat Completions and Anthropic Messages, with streaming and tool calls. Built-in presets for DeepSeek, Moonshot Kimi, generic OpenAI, and Claude. Custom providers of either format. API keys go to the OS keychain when it is available, otherwise to a `0600` file. They are never written into git or into `config.toml`.
+- **Providers** (`grok-providers`): xAI/Grok (Responses API, the default), OpenAI-compatible Chat Completions, and Anthropic Messages, with streaming and tool calls. Built-in presets for Grok, DeepSeek, Moonshot Kimi, generic OpenAI, and Claude. Custom providers of any of those formats. API keys go to the OS keychain when it is available, otherwise to a `0600` file. They are never written into git or into `config.toml`. A `grok login` session is reused for Grok.
 
 ## Architecture
 
@@ -103,6 +103,63 @@ cargo build -p xai-grok-pager-bin
 
 The desktop Terminal page looks for `GROK_BIN`, then `grok` / `xai-grok-pager` on `PATH`, then `target/debug/xai-grok-pager` and `target/release/xai-grok-pager` walking up from the current directory.
 
+## Downloads
+
+Pushing a tag named `v*` (for example `v0.1.0`) runs [`.github/workflows/release.yml`](.github/workflows/release.yml) on GitHub-hosted runners. The workflow uses [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action) and uploads a GitHub Release. **Run workflow** on that same file (`workflow_dispatch`) builds the same matrix and uploads Actions artifacts without publishing a Release. These jobs run after this repository is on GitHub.
+
+| Platform | Desktop assets | CLI asset |
+|----------|----------------|-----------|
+| Windows x64 | `.msi` and NSIS `.exe` | `grok-x86_64-pc-windows-msvc.exe` |
+| macOS Apple Silicon | `.dmg` | `grok-aarch64-apple-darwin` |
+| macOS Intel | `.dmg` (cross-built on the Apple Silicon runner) | `grok-x86_64-apple-darwin` |
+| Linux x64 | `.deb` and `.AppImage` | `grok-x86_64-unknown-linux-gnu` |
+
+Each `grok-<target>` file is the `xai-grok-pager` binary. Rename it to `grok` or `xai-grok-pager`, put it on `PATH`, or set `GROK_BIN`. The desktop app also looks next to its own executable for those names. The CLI build needs `protoc` 29.3; the workflow installs it. Builds are unsigned until the secrets below are set.
+
+Branch pushes and pull requests still run [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml), which tests providers and compiles the desktop binary without producing installers.
+
+### Opening an unsigned macOS app
+
+Gatekeeper blocks an unsigned or unnotarized app the first time it is opened.
+
+1. Move `Grok Desktop.app` to `/Applications` (or leave the `.dmg` mounted).
+2. Control-click the app and choose **Open**, then **Open** again in the dialog.
+3. If macOS only offers **Move to Trash**, open **System Settings → Privacy & Security**, scroll to the blocked app, and choose **Open Anyway**.
+4. From Terminal, the quarantine flag can be cleared and the app opened:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Grok Desktop.app"
+open "/Applications/Grok Desktop.app"
+```
+
+An unsigned CLI binary can be run the same way: `xattr -dr com.apple.quarantine ./grok-aarch64-apple-darwin`, then `chmod +x` and execute it. Intel builds use the `x86_64` asset.
+
+### Code signing and notarization later
+
+The release workflow forwards a secret only when it is non-empty, so adding these repository secrets turns signing on without another code change.
+
+**macOS** (Developer ID Application + notarization). Create a Developer ID Application certificate, export the `.p12`, and base64-encode it (`base64 -i certificate.p12 | tr -d '\n'`).
+
+| Secret | Value |
+|--------|--------|
+| `APPLE_CERTIFICATE` | Base64 of the `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password for that `.p12` |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: Name (TEAMID)` |
+| `APPLE_ID` | Apple ID email used by `notarytool` |
+| `APPLE_PASSWORD` | App-specific password |
+| `APPLE_TEAM_ID` | 10-character Team ID |
+
+An App Store Connect API key can replace the Apple ID password. Set `APPLE_API_ISSUER`, `APPLE_API_KEY` (the key id), and `APPLE_API_KEY_PATH` (or the key contents, matching the Tauri 2 macOS signing guide). After notarization, the `.dmg` opens without the steps above.
+
+**Windows** (Authenticode). Export a code-signing `.pfx` and base64-encode it.
+
+| Secret | Value |
+|--------|--------|
+| `WINDOWS_CERTIFICATE` | Base64 of the `.pfx` |
+| `WINDOWS_CERTIFICATE_PASSWORD` | Password for that `.pfx` |
+
+The Windows job imports the certificate and writes its thumbprint into `bundle.windows.certificateThumbprint` before `tauri build`, with SHA-256 and `http://timestamp.digicert.com`. Leave the secrets unset to keep the `.msi` and NSIS `.exe` unsigned.
+
 ## Configure providers
 
 Files live under `$GROK_HOME` or `~/.grok`:
@@ -123,6 +180,33 @@ Print an example file:
 cargo run -p grok-providers -- presets > "$HOME/.grok/providers.toml"
 cargo run -p grok-providers -- sync
 ```
+
+### Grok / xAI
+
+Default provider for new desktop chats. Base URL `https://api.x.ai/v1`. The wire protocol is the Responses API (`POST /v1/responses`) with `reasoning.effort` set to `high`. Grok 4.x does not use Chat Completions here.
+
+The default model is not a hard-coded version.
+
+- On desktop launch, if a settings key, a `grok login` session, or `XAI_API_KEY` is available, the app calls `GET https://api.x.ai/v1/models`.
+- It picks the highest **decimal** version among ids shaped like `grok-<number>` (`4.7` outranks `4.20` and `4.6`, which matches xAI's lineup: Grok 4.7 is newer than the 4.20 series).
+- Suffix tokens `mini`, `vision`, `image`, `imagine`, `video`, `voice`, `audio`, `tts`, `stt`, and `embed` are skipped unless every returned id is one of those. An unsuffixed id wins a tie (`grok-4.7` before `grok-4.7-fast`).
+- The list is cached at `~/.grok/xai-model-cache.json`. The desktop app refreshes it on every launch. The cache is treated as fresh for 6 hours for the CLI.
+- The CLI does not call the network while loading config. It uses the cache when one exists, otherwise the offline fallback. `grok-providers refresh-models` fetches the list and writes both `providers.toml` and `config.toml`.
+- Offline fallback: `grok-4.7`, then the ids in upstream `default_models.json` (`grok-4.6`, `grok-4.5`), which stay selectable.
+- Uncheck **Always use the newest Grok** in Settings, or set `XAI_MODEL`, to pin a model. A pin is not overwritten by a later refresh.
+
+`grok-4.7` was confirmed on 2026-10-19 from the public docs: [models](https://docs.x.ai/docs/models) and [Grok 4.7](https://docs.x.ai/developers/grok-4-7) (model id `grok-4.7`, 500k context, Responses API, page updated 2026-10-10). Upstream `crates/codegen/xai-grok-models/default_models.json` in this snapshot still bakes `grok-4.6` as its default and also lists `grok-4.5`. `grok-4.7` is not in that file; it does appear as a fixture id in upstream tests.
+
+Credential order for this preset: a key saved in Settings (keychain or the `0600` file), then the `grok login` session (`GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json`), then `XAI_API_KEY`, then `GROK_CODE_XAI_API_KEY`, then the `xai::api_key` entry in `auth.json`. The synced CLI table uses `api_backend = "responses"` and does not set `env_key`, so upstream's own fallback still prefers a login session over `XAI_API_KEY`.
+
+```sh
+export XAI_API_KEY=xai-...                 # optional when `grok login` already succeeded
+export XAI_BASE_URL=https://api.x.ai/v1   # optional
+export XAI_MODEL=grok-4.5                 # optional pin; omit to follow latest
+cargo run -p grok-providers -- refresh-models
+```
+
+Encrypted reasoning content that the Responses API returns is not yet sent back on the next desktop turn.
 
 ### DeepSeek
 

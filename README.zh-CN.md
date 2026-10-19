@@ -10,7 +10,7 @@ English: [README.md](README.md).
 
 - **Grok Desktop**（`grok-desktop`）：基于 Tauri 2 的窗口（Windows、macOS、Linux）。包含会话、文件和终端工具、扩展发现、快捷键，以及中文（zh-CN）和英文设置界面。
 - **窗口里的经典 TUI**：终端页用 PTY 启动原来的 `xai-grok-pager`。斜杠命令、插件、hooks、MCP、沙箱，以及上游 TUI 的其余能力都还在。
-- **供应商**（`grok-providers`）：OpenAI 兼容的 Chat Completions，以及 Anthropic Messages。支持流式输出和工具调用。内置 DeepSeek、月之暗面 Kimi、通用 OpenAI、Claude。两种协议都可以添加自定义供应商。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。
+- **供应商**（`grok-providers`）：xAI/Grok（Responses API，默认供应商）、OpenAI 兼容的 Chat Completions，以及 Anthropic Messages。支持流式输出和工具调用。内置 Grok、DeepSeek、月之暗面 Kimi、通用 OpenAI、Claude。这三种协议都可以添加自定义供应商。API 密钥优先放进系统钥匙串；钥匙串不可用时写入权限为 `0600` 的文件。密钥不会进入 git，也不会写进 `config.toml`。Grok 会复用 `grok login` 的登录会话。
 
 ## 结构
 
@@ -104,6 +104,63 @@ cargo build -p xai-grok-pager-bin
 
 桌面里的终端页按这个顺序找二进制：`GROK_BIN`，然后是 `PATH` 上的 `grok` 或 `xai-grok-pager`，再从当前目录向上找 `target/debug/xai-grok-pager` 和 `target/release/xai-grok-pager`。
 
+## 下载
+
+推送名为 `v*` 的标签（例如 `v0.1.0`）会在 GitHub 托管的 runner 上运行 [`.github/workflows/release.yml`](.github/workflows/release.yml)。该工作流使用 [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action)，并把安装包上传到 GitHub Release。在同一个工作流上选择 **Run workflow**（`workflow_dispatch`）会构建同样的矩阵，只上传 Actions 产物，不发布 Release。这些任务要等仓库放到 GitHub 上才会执行。
+
+| 平台 | 桌面安装包 | CLI 文件 |
+|------|------------|----------|
+| Windows x64 | `.msi` 和 NSIS `.exe` | `grok-x86_64-pc-windows-msvc.exe` |
+| macOS Apple Silicon | `.dmg` | `grok-aarch64-apple-darwin` |
+| macOS Intel | `.dmg`（在 Apple Silicon runner 上交叉编译） | `grok-x86_64-apple-darwin` |
+| Linux x64 | `.deb` 和 `.AppImage` | `grok-x86_64-unknown-linux-gnu` |
+
+每个 `grok-<target>` 文件就是 `xai-grok-pager`。把它改名为 `grok` 或 `xai-grok-pager` 放进 `PATH`，或设置 `GROK_BIN`。桌面应用也会在自己的可执行文件旁边查找这些名字。CLI 构建需要 `protoc` 29.3，工作流会安装它。在配置下面的密钥之前，构建结果是未签名的。
+
+分支推送和 pull request 仍然运行 [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml)：测试供应商并编译桌面二进制，不制作安装包。
+
+### 打开未签名的 macOS 应用
+
+Gatekeeper 会在第一次打开未签名或未公证的应用时拦截。
+
+1. 把 `Grok Desktop.app` 拖到 `/Applications`（也可以先不推出 `.dmg`）。
+2. 按住 Control 点按应用，选择 **打开**，再在对话框里点 **打开**。
+3. 如果系统只给出 **移到废纸篓**，打开 **系统设置 → 隐私与安全性**，找到被拦截的应用，选择 **仍要打开**。
+4. 也可以在终端去掉隔离属性再打开：
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Grok Desktop.app"
+open "/Applications/Grok Desktop.app"
+```
+
+未签名的 CLI 同样处理：`xattr -dr com.apple.quarantine ./grok-aarch64-apple-darwin`，然后 `chmod +x` 再执行。Intel 使用 `x86_64` 那个文件。
+
+### 以后再加上代码签名和公证
+
+发布工作流只在密钥非空时才把它传给构建。在仓库里加上这些 Secrets 即可打开签名，不必再改工作流。
+
+**macOS**（Developer ID Application + 公证）。创建 Developer ID Application 证书，导出 `.p12`，再做 base64（`base64 -i certificate.p12 | tr -d '\n'`）。
+
+| Secret | 内容 |
+|--------|------|
+| `APPLE_CERTIFICATE` | `.p12` 的 Base64 |
+| `APPLE_CERTIFICATE_PASSWORD` | 该 `.p12` 的密码 |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: 名称 (TEAMID)` |
+| `APPLE_ID` | `notarytool` 使用的 Apple ID 邮箱 |
+| `APPLE_PASSWORD` | 应用专用密码 |
+| `APPLE_TEAM_ID` | 10 位 Team ID |
+
+也可以改用 App Store Connect API 密钥，设置 `APPLE_API_ISSUER`、`APPLE_API_KEY`（密钥 id）和 `APPLE_API_KEY_PATH`（或密钥内容，与 Tauri 2 的 macOS 签名文档一致）。公证完成后，`.dmg` 可以直接打开，不必再走上面的步骤。
+
+**Windows**（Authenticode）。导出代码签名 `.pfx` 并做 base64。
+
+| Secret | 内容 |
+|--------|------|
+| `WINDOWS_CERTIFICATE` | `.pfx` 的 Base64 |
+| `WINDOWS_CERTIFICATE_PASSWORD` | 该 `.pfx` 的密码 |
+
+Windows 任务会导入证书，并在 `tauri build` 之前把指纹写进 `bundle.windows.certificateThumbprint`，摘要算法为 SHA-256，时间戳服务器为 `http://timestamp.digicert.com`。不设置这些密钥时，`.msi` 和 NSIS `.exe` 保持未签名。
+
 ## 配置供应商
 
 文件在 `$GROK_HOME` 或 `~/.grok`：
@@ -124,6 +181,33 @@ cargo build -p xai-grok-pager-bin
 cargo run -p grok-providers -- presets > "$HOME/.grok/providers.toml"
 cargo run -p grok-providers -- sync
 ```
+
+### Grok / xAI
+
+新桌面对话的默认供应商。基址 `https://api.x.ai/v1`。协议是 Responses API（`POST /v1/responses`），`reasoning.effort` 为 `high`。这里的 Grok 4.x 不走 Chat Completions。
+
+默认模型不是写死的版本。
+
+- 桌面应用每次启动时，如果设置里有密钥、存在 `grok login` 会话，或设置了 `XAI_API_KEY`，就请求 `GET https://api.x.ai/v1/models`。
+- 在形如 `grok-<数字>` 的 id 里，按**十进制**版本号选最高的（`4.7` 高于 `4.20` 和 `4.6`。这与 xAI 的产品线一致：Grok 4.7 比 4.20 系列更新）。
+- 后缀里含 `mini`、`vision`、`image`、`imagine`、`video`、`voice`、`audio`、`tts`、`stt`、`embed` 的 id 会跳过，除非返回的全是这类模型。同分时没有后缀的 id 优先（`grok-4.7` 先于 `grok-4.7-fast`）。
+- 列表缓存在 `~/.grok/xai-model-cache.json`。桌面应用每次启动都刷新。对 CLI 来说，这份缓存 6 小时内视为新鲜。
+- CLI 加载配置时不访问网络。有缓存就用缓存，否则用离线回退。`grok-providers refresh-models` 会拉取列表并写入 `providers.toml` 和 `config.toml`。
+- 离线回退：`grok-4.7`，然后是上游 `default_models.json` 里的 `grok-4.6` 和 `grok-4.5`。后两个仍然可以手动选择。
+- 在设置里取消 **始终使用最新的 Grok**，或设置 `XAI_MODEL`，即可固定模型。固定之后，之后的刷新不会覆盖它。
+
+2026-10-19 核对过公开文档：[模型列表](https://docs.x.ai/docs/models) 和 [Grok 4.7](https://docs.x.ai/developers/grok-4-7)（模型 id `grok-4.7`，50 万上下文，Responses API，页面更新于 2026-10-10）。本快照里上游的 `crates/codegen/xai-grok-models/default_models.json` 仍把 `grok-4.6` 当作内置默认，并列出 `grok-4.5`。该文件没有 `grok-4.7`；上游测试里把它当作夹具 id 使用过。
+
+这个预设的凭据顺序：设置里保存的密钥（钥匙串或 `0600` 文件），然后是 `grok login` 会话（`GROK_AUTH`、`$GROK_AUTH_PATH` 或 `$GROK_HOME/auth.json`），然后是 `XAI_API_KEY`，然后是 `GROK_CODE_XAI_API_KEY`，最后是 `auth.json` 里的 `xai::api_key`。同步到 CLI 的表使用 `api_backend = "responses"`，并且不写 `env_key`，所以上游自己的回退仍然让登录会话优先于 `XAI_API_KEY`。
+
+```sh
+export XAI_API_KEY=xai-...                 # 已经 grok login 成功时可以不设
+export XAI_BASE_URL=https://api.x.ai/v1   # 可选
+export XAI_MODEL=grok-4.5                 # 可选，固定模型；不设则跟随最新
+cargo run -p grok-providers -- refresh-models
+```
+
+Responses API 返回的加密推理内容，下一轮桌面对话里还不会原样带回。
 
 ### DeepSeek
 

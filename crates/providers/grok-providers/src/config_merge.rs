@@ -82,6 +82,11 @@ pub fn merge_store_presets(raw: &mut toml::Value, store: &ProviderStore) {
 /// override the preset defaults. Existing tables win.
 pub fn merge_env_presets_with(raw: &mut toml::Value, env: &BTreeMap<String, String>) {
     for preset in builtin_presets() {
+        // xAI is merged separately so a `grok login` session counts, and so the
+        // model can follow the cached newest id without an HTTP call.
+        if preset.id == "xai" {
+            continue;
+        }
         let key_set = std::iter::once(preset.env_key)
             .chain(preset.env_key_fallbacks.iter().copied())
             .any(|name| env_nonempty(env, name).is_some());
@@ -123,6 +128,41 @@ pub fn merge_env_presets_with(raw: &mut toml::Value, env: &BTreeMap<String, Stri
             insert_model_if_absent(raw, key, &provider, &provider.model, &provider.name);
         }
     }
+}
+
+/// Insert the xAI preset when a key or a `grok login` session exists.
+///
+/// Does not call the network. The model is `XAI_MODEL` when that variable is
+/// set (a pin), otherwise the cached `/v1/models` choice or the offline
+/// fallback. An existing `[model_providers.xai]` or `[model.xai]` table wins.
+pub fn merge_xai_preset(
+    raw: &mut toml::Value,
+    env: &BTreeMap<String, String>,
+    login: &crate::xai_auth::LoginSnapshot,
+) {
+    let has_credential = crate::xai_auth::env_key(env).is_some()
+        || login.session.is_some()
+        || login.api_key.is_some();
+    if !has_credential {
+        return;
+    }
+    let Some(preset) = preset_by_id("xai") else {
+        return;
+    };
+    let mut provider = preset.to_config(true);
+    if let Some(base_url) = env_nonempty(env, "XAI_BASE_URL") {
+        provider.base_url = base_url;
+    }
+    if let Some(model) = env_nonempty(env, "XAI_MODEL") {
+        provider.model = model;
+        provider.follow_latest = false;
+    } else {
+        let choice = crate::xai_models::choice_from_cache_or_offline();
+        provider.model = choice.latest;
+        provider.model_hints = choice.models;
+    }
+    insert_provider_if_absent(raw, &provider);
+    insert_model_if_absent(raw, "xai", &provider, &provider.model, &provider.name);
 }
 
 fn env_nonempty(env: &BTreeMap<String, String>, name: &str) -> Option<String> {
@@ -461,16 +501,86 @@ mod tests {
     #[test]
     fn store_merge_skips_disabled_providers() {
         let mut store = crate::presets::default_store();
-        store.providers[0].enabled = true;
+        let deepseek = store
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == "deepseek")
+            .unwrap();
+        deepseek.enabled = true;
         let mut raw = toml::Value::Table(toml::map::Map::new());
         merge_store_presets(&mut raw, &store);
-        assert!(
+        let providers = raw.get("model_providers").unwrap();
+        assert!(providers.get("xai").is_some());
+        assert!(providers.get("deepseek").is_some());
+        assert!(providers.get("kimi").is_none());
+        assert_eq!(
+            providers
+                .get("xai")
+                .unwrap()
+                .get("api_backend")
+                .and_then(toml::Value::as_str),
+            Some("responses")
+        );
+        assert!(providers.get("xai").unwrap().get("env_key").is_none());
+    }
+
+    #[test]
+    fn xai_env_preset_follows_latest_until_xai_model_pins_it() {
+        let mut raw = toml::Value::Table(toml::map::Map::new());
+        let login = crate::xai_auth::LoginSnapshot {
+            session: Some("session-token".into()),
+            api_key: None,
+        };
+        merge_xai_preset(&mut raw, &BTreeMap::new(), &login);
+        let model = raw
+            .get("model")
+            .unwrap()
+            .get("xai")
+            .unwrap()
+            .get("model")
+            .and_then(toml::Value::as_str)
+            .unwrap();
+        assert!(model.starts_with("grok-"), "{model}");
+        assert_eq!(
             raw.get("model_providers")
                 .unwrap()
-                .get("deepseek")
-                .is_some()
+                .get("xai")
+                .unwrap()
+                .get("api_backend")
+                .and_then(toml::Value::as_str),
+            Some("responses")
         );
-        assert!(raw.get("model_providers").unwrap().get("kimi").is_none());
+
+        let mut pinned = toml::Value::Table(toml::map::Map::new());
+        let mut env = BTreeMap::new();
+        env.insert("XAI_API_KEY".into(), "sk-test".into());
+        env.insert("XAI_MODEL".into(), "grok-4.5".into());
+        env.insert("XAI_BASE_URL".into(), "https://us.api.x.ai/v1".into());
+        merge_xai_preset(
+            &mut pinned,
+            &env,
+            &crate::xai_auth::LoginSnapshot::default(),
+        );
+        assert_eq!(
+            pinned
+                .get("model")
+                .unwrap()
+                .get("xai")
+                .unwrap()
+                .get("model")
+                .and_then(toml::Value::as_str),
+            Some("grok-4.5")
+        );
+        assert_eq!(
+            pinned
+                .get("model_providers")
+                .unwrap()
+                .get("xai")
+                .unwrap()
+                .get("base_url")
+                .and_then(toml::Value::as_str),
+            Some("https://us.api.x.ai/v1")
+        );
     }
 
     #[test]

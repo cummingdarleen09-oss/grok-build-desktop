@@ -13,7 +13,7 @@ pub struct DesktopSettings {
     pub permission: String,
     #[serde(default)]
     pub cwd: String,
-    #[serde(default)]
+    #[serde(default = "default_active_provider")]
     pub active_provider: Option<String>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,
@@ -27,6 +27,10 @@ fn default_permission() -> String {
     "ask".into()
 }
 
+fn default_active_provider() -> Option<String> {
+    Some("xai".into())
+}
+
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
@@ -36,7 +40,7 @@ impl Default for DesktopSettings {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .display()
                 .to_string(),
-            active_provider: None,
+            active_provider: default_active_provider(),
             disabled_tools: Vec::new(),
         }
     }

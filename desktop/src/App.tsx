@@ -394,7 +394,7 @@ function SettingsView(props: {
   const [secrets, setSecrets] = useState(props.boot.secrets);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
-  const [custom, setCustom] = useState<{ id: string; name: string; format: "openai" | "anthropic"; base_url: string; model: string; env_key: string }>({ id: "", name: "", format: "openai", base_url: "http://127.0.0.1:8000/v1", model: "", env_key: "CUSTOM_API_KEY" });
+  const [custom, setCustom] = useState<{ id: string; name: string; format: Provider["format"]; base_url: string; model: string; env_key: string }>({ id: "", name: "", format: "openai", base_url: "http://127.0.0.1:8000/v1", model: "", env_key: "CUSTOM_API_KEY" });
 
   function update(id: string, patch: Partial<Provider>) {
     setProviders((current) => current.map((provider) => provider.id === id ? { ...provider, ...patch } : provider));
@@ -406,7 +406,8 @@ function SettingsView(props: {
     try {
       await saveSettings(settings);
       const saved = await saveProviders(store);
-      props.onSaved(settings, saved);
+      setProviders(saved.providers);
+      props.onSaved({ ...settings, active_provider: saved.active }, saved);
       setNotice(t("settings.saved"));
     } catch (reason) {
       props.setError(String(reason));
@@ -435,7 +436,7 @@ function SettingsView(props: {
       <div className="cards">
         {providers.map((provider) => {
           const secret = secrets.find((item) => item.id === provider.id);
-          const where = secret?.location === "keyring" ? t("settings.keyring") : secret?.location === "file" ? t("settings.file") : secret?.from_env ? t("settings.env") : t("settings.none");
+          const where = secret?.location === "keyring" ? t("settings.keyring") : secret?.location === "file" ? t("settings.file") : secret?.from_session ? t("settings.session") : secret?.from_env ? t("settings.env") : t("settings.none");
           return (
             <article key={provider.id} className="card">
               <h3>{provider.name}</h3>
@@ -443,11 +444,15 @@ function SettingsView(props: {
               <div className="checks">
                 <label><input type="checkbox" checked={provider.enabled} onChange={(event) => update(provider.id, { enabled: event.target.checked })} />{t("settings.enabled")}</label>
                 <label><input type="radio" name="active" checked={settings.active_provider === provider.id} onChange={() => setSettings({ ...settings, active_provider: provider.id })} />{t("settings.active")}</label>
+                {provider.id === "xai" && (
+                  <label><input type="checkbox" checked={provider.follow_latest} onChange={(event) => update(provider.id, { follow_latest: event.target.checked })} />{t("settings.latest")}</label>
+                )}
                 <span className="status-pill">{where}</span>
               </div>
+              {provider.id === "xai" && <p className="hint">{t("settings.latestHint")}</p>}
               <label>{t("settings.baseUrl")}<input value={provider.base_url} onChange={(event) => update(provider.id, { base_url: event.target.value })} /></label>
               <label>{t("settings.model")}
-                <input list={`${provider.id}-models`} value={provider.model} onChange={(event) => update(provider.id, { model: event.target.value })} />
+                <input list={`${provider.id}-models`} value={provider.model} onChange={(event) => update(provider.id, provider.id === "xai" ? { model: event.target.value, follow_latest: false } : { model: event.target.value })} />
                 <datalist id={`${provider.id}-models`}>{provider.model_hints.map((hint) => <option key={hint} value={hint} />)}</datalist>
               </label>
               <label>{t("settings.context")}<input type="number" value={provider.context_window} onChange={(event) => update(provider.id, { context_window: Number(event.target.value) })} /></label>
@@ -479,9 +484,10 @@ function SettingsView(props: {
           <label>{t("settings.id")}<input value={custom.id} onChange={(event) => setCustom({ ...custom, id: event.target.value })} /></label>
           <label>{t("settings.name")}<input value={custom.name} onChange={(event) => setCustom({ ...custom, name: event.target.value })} /></label>
           <label>{t("settings.format")}
-            <select value={custom.format} onChange={(event) => setCustom({ ...custom, format: event.target.value as "openai" | "anthropic" })}>
+            <select value={custom.format} onChange={(event) => setCustom({ ...custom, format: event.target.value as Provider["format"] })}>
               <option value="openai">{t("settings.openai")}</option>
               <option value="anthropic">{t("settings.anthropic")}</option>
+              <option value="responses">{t("settings.responses")}</option>
             </select>
           </label>
           <label>{t("settings.baseUrl")}<input value={custom.base_url} onChange={(event) => setCustom({ ...custom, base_url: event.target.value })} /></label>
@@ -507,9 +513,10 @@ function SettingsView(props: {
               token_field: "max_tokens",
               builtin: false,
               model_hints: [custom.model],
+              follow_latest: false,
             };
             setProviders((current) => [...current.filter((item) => item.id !== provider.id), provider]);
-            setSecrets((current) => current.some((item) => item.id === provider.id) ? current : [...current, { id: provider.id, location: null, from_env: false }]);
+            setSecrets((current) => current.some((item) => item.id === provider.id) ? current : [...current, { id: provider.id, location: null, from_env: false, from_session: false }]);
           }}>{t("settings.add")}</button>
         </article>
       </div>

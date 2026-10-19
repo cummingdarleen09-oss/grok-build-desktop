@@ -78,6 +78,27 @@ pub fn anthropic_request_body(
     Ok(body)
 }
 
+pub fn responses_request_body(
+    provider: &ProviderConfig,
+    turns: &[Turn],
+    tools: &[ToolDef],
+) -> Result<Value, ProviderError> {
+    let mut body = json!({
+        "model": provider.model,
+        "input": responses_input(turns)?,
+        "stream": true,
+        "max_output_tokens": provider.max_tokens,
+        "reasoning": { "effort": "high" },
+    });
+    if let Some(temperature) = provider.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools.iter().map(responses_tool).collect());
+    }
+    Ok(body)
+}
+
 pub fn request_body(
     provider: &ProviderConfig,
     turns: &[Turn],
@@ -86,7 +107,53 @@ pub fn request_body(
     match provider.format {
         ProviderFormat::OpenAi => openai_request_body(provider, turns, tools),
         ProviderFormat::Anthropic => anthropic_request_body(provider, turns, tools),
+        ProviderFormat::Responses => responses_request_body(provider, turns, tools),
     }
+}
+
+fn responses_input(turns: &[Turn]) -> Result<Vec<Value>, ProviderError> {
+    let mut input = Vec::new();
+    for turn in turns {
+        match turn.role {
+            Role::System => input.push(json!({"role": "system", "content": turn.text})),
+            Role::User => input.push(json!({"role": "user", "content": turn.text})),
+            Role::Assistant => {
+                if !turn.text.is_empty() {
+                    input.push(json!({"role": "assistant", "content": turn.text}));
+                }
+                for call in &turn.tool_calls {
+                    input.push(json!({
+                        "type": "function_call",
+                        "call_id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }));
+                }
+            }
+            Role::Tool => {
+                let Some(call_id) = turn.tool_call_id.as_deref() else {
+                    return Err(ProviderError::Invalid(
+                        "tool result is missing a call id".into(),
+                    ));
+                };
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": turn.text,
+                }));
+            }
+        }
+    }
+    Ok(input)
+}
+
+fn responses_tool(tool: &ToolDef) -> Value {
+    json!({
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+    })
 }
 
 fn openai_messages(turns: &[Turn]) -> Result<Vec<Value>, ProviderError> {
@@ -256,6 +323,7 @@ mod tests {
             },
             builtin: false,
             model_hints: Vec::new(),
+            follow_latest: false,
         }
     }
 
@@ -340,6 +408,40 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|message| message["role"] != "system")
+        );
+    }
+
+    #[test]
+    fn responses_body_uses_input_tools_and_max_output_tokens() {
+        let provider = provider(ProviderFormat::Responses);
+        let body = responses_request_body(
+            &provider,
+            &sample_turns(),
+            &[ToolDef {
+                name: "read_file".into(),
+                description: "Read a file".into(),
+                parameters: json!({"type": "object"}),
+            }],
+        )
+        .unwrap();
+        assert_eq!(body["model"], "demo-model");
+        assert_eq!(body["max_output_tokens"], 128);
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["stream"], true);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input[0]["role"], "system");
+        assert_eq!(input[1]["role"], "user");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["name"], "read_file");
+        assert_eq!(input[2]["call_id"], "call_1");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["output"], "fn main() {}");
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["name"], "read_file");
+        assert!(body.get("messages").is_none());
+        assert_eq!(
+            endpoint_url("https://api.x.ai/v1", "responses").unwrap(),
+            "https://api.x.ai/v1/responses"
         );
     }
 

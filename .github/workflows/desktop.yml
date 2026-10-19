@@ -1,11 +1,13 @@
-# Desktop app and provider tests.
-# The upstream CLI (`cargo build -p xai-grok-pager-bin`) is large and needs
-# protoc 29.3; build that locally. See README.md.
+# Desktop app and provider tests on every branch push and pull request.
+# Tag pushes (`v*`) and manual release builds live in release.yml. That
+# workflow produces installers and the CLI binary on GitHub-hosted runners.
 
 name: desktop
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
 
 jobs:

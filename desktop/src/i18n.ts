@@ -47,6 +47,11 @@ const en = {
   "settings.file": "Private file",
   "settings.env": "Environment variable",
   "settings.none": "No key yet",
+  "settings.session": "grok login",
+  "settings.latest": "Always use the newest Grok",
+  "settings.latestHint":
+    "On each launch, if a key or grok login session is available, the newest general Grok model from api.x.ai/v1/models is selected. Uncheck this and edit the model name to pin one. Offline, the fallback is grok-4.7.",
+  "settings.responses": "xAI Responses",
   "settings.context": "Context window",
   "settings.format": "API format",
   "settings.envKey": "Env var",
@@ -129,6 +134,11 @@ const zh: Record<keyof typeof en, string> = {
   "settings.file": "本地私密文件",
   "settings.env": "环境变量",
   "settings.none": "尚未设置密钥",
+  "settings.session": "已登录 grok",
+  "settings.latest": "始终使用最新的 Grok",
+  "settings.latestHint":
+    "每次启动时，如果有密钥或 grok 登录会话，就从 api.x.ai/v1/models 里选择最新的通用 Grok 模型。取消勾选并修改模型名即可固定版本。离线时回退到 grok-4.7。",
+  "settings.responses": "xAI Responses",
   "settings.context": "上下文长度",
   "settings.format": "接口格式",
   "settings.envKey": "环境变量名",

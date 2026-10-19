@@ -118,6 +118,66 @@ async fn anthropic_mock_uses_x_api_key_and_messages_path() {
 }
 
 #[tokio::test]
+async fn responses_mock_streams_text_and_function_calls() {
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n",
+        "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"name\":\"list_dir\",\"call_id\":\"call_9\",\"arguments\":\"\"}}\n\n",
+        "event: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{\\\"path\\\":\\\".\\\"}\"}\n\n",
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer sk-xai"))
+        .and(body_partial_json(json!({
+            "model": "grok-4.7",
+            "stream": true,
+            "max_output_tokens": 32
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut provider = preset("xai");
+    provider.base_url = format!("{}/v1", server.uri());
+    provider.model = "grok-4.7".into();
+    let client = ProviderClient::new().unwrap();
+    let turns = vec![Turn::user("ping")];
+    let mut stream = client
+        .stream(CompletionRequest {
+            provider: &provider,
+            api_key: "sk-xai",
+            turns: &turns,
+            tools: &[],
+        })
+        .await
+        .unwrap();
+    let mut text = String::new();
+    let mut tool_name = String::new();
+    let mut stop = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while let Some(event) = stream.next().await {
+        match event.unwrap() {
+            ProviderEvent::Text { text: delta } => text.push_str(&delta),
+            ProviderEvent::ToolStart { name, .. } => tool_name = name,
+            ProviderEvent::Stop { reason } => stop = Some(reason),
+            _ => {}
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("stream did not finish");
+        }
+    }
+    assert_eq!(text, "pong");
+    assert_eq!(tool_name, "list_dir");
+    assert_eq!(stop, Some(StopReason::ToolUse));
+}
+
+#[tokio::test]
 async fn http_error_is_redacted() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

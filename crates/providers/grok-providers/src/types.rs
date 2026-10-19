@@ -11,6 +11,9 @@ pub enum ProviderFormat {
     /// Anthropic Messages API (`/v1/messages`).
     #[serde(rename = "anthropic")]
     Anthropic,
+    /// xAI / OpenAI Responses API (`/v1/responses`). Grok 4.x uses this.
+    #[serde(rename = "responses")]
+    Responses,
 }
 
 impl ProviderFormat {
@@ -18,6 +21,7 @@ impl ProviderFormat {
         match self {
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::Responses => "responses",
         }
     }
 
@@ -25,6 +29,7 @@ impl ProviderFormat {
         match self {
             Self::OpenAi => "chat_completions",
             Self::Anthropic => "messages",
+            Self::Responses => "responses",
         }
     }
 
@@ -32,6 +37,7 @@ impl ProviderFormat {
         match self {
             Self::OpenAi => "chat/completions",
             Self::Anthropic => "messages",
+            Self::Responses => "responses",
         }
     }
 }
@@ -104,12 +110,15 @@ pub struct ProviderConfig {
     pub max_tokens: u32,
     #[serde(default)]
     pub token_field: TokenField,
-    /// True for DeepSeek, Kimi, OpenAI, and Anthropic presets.
+    /// True for DeepSeek, Kimi, OpenAI, Anthropic, and xAI presets.
     #[serde(default)]
     pub builtin: bool,
     /// Model ids the settings UI offers as suggestions. Not sent on the wire.
     #[serde(default)]
     pub model_hints: Vec<String>,
+    /// When true, `model` tracks the newest general Grok model. A settings pin sets this false.
+    #[serde(default)]
+    pub follow_latest: bool,
 }
 
 impl ProviderConfig {

@@ -124,6 +124,16 @@ pub fn find_grok_binary() -> Option<PathBuf> {
             return Some(path);
         }
     }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            for name in ["grok", "xai-grok-pager", "grok.exe", "xai-grok-pager.exe"] {
+                let candidate = parent.join(name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
     for name in ["grok", "xai-grok-pager"] {
         if let Ok(path) = which::which(name) {
             return Some(path);

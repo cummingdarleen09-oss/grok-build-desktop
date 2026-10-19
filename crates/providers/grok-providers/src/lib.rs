@@ -17,6 +17,8 @@ mod secrets;
 mod stream;
 mod translate;
 mod types;
+mod xai_auth;
+mod xai_models;
 
 pub use client::{CompletionRequest, ProviderClient};
 pub use config_merge::{
@@ -27,11 +29,13 @@ pub use config_merge::{
 pub use presets::{Preset, builtin_presets, default_store, normalize_store};
 pub use secrets::{SecretLocation, SecretStore};
 pub use stream::{
-    AnthropicAcc, AssistantBuild, OpenAiAcc, SseDecoder, SseEvent, decode_anthropic_event,
-    decode_openai_data,
+    AnthropicAcc, AssistantBuild, OpenAiAcc, ResponsesAcc, SseDecoder, SseEvent,
+    decode_anthropic_event, decode_openai_data, decode_responses_data,
 };
 pub use translate::{anthropic_request_body, endpoint_url, openai_request_body};
 pub use types::*;
+pub use xai_auth::{has_login_session, pick_xai_secret};
+pub use xai_models::{apply_choice, refresh_xai_models, refresh_xai_models_blocking};
 
 /// Read `~/.grok/providers.toml` (or `$GROK_HOME/providers.toml`) and the
 /// process environment, and fold any configured third-party providers into a
@@ -43,8 +47,12 @@ pub fn merge_configured_providers(raw: &mut toml::Value) {
     if presets_disabled() {
         return;
     }
+    let mut loaded = None;
     match config_merge::load_provider_store_if_present() {
-        Ok(Some(store)) => merge_store_presets(raw, &store),
+        Ok(Some(store)) => {
+            merge_store_presets(raw, &store);
+            loaded = Some(store);
+        }
         Ok(None) => {}
         Err(error) => {
             tracing::warn!(%error, "ignoring unreadable providers.toml");
@@ -52,6 +60,15 @@ pub fn merge_configured_providers(raw: &mut toml::Value) {
     }
     let env = std::env::vars().collect();
     merge_env_presets_with(raw, &env);
+    let xai_disabled = loaded.as_ref().is_some_and(|store| {
+        store
+            .providers
+            .iter()
+            .any(|provider| provider.id == "xai" && !provider.enabled)
+    });
+    if !xai_disabled {
+        config_merge::merge_xai_preset(raw, &env, &xai_auth::current_login());
+    }
 }
 
 fn presets_disabled() -> bool {

@@ -2,7 +2,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::stream::{
-    AnthropicAcc, OpenAiAcc, SseDecoder, decode_anthropic_event, decode_openai_data,
+    AnthropicAcc, OpenAiAcc, ResponsesAcc, SseDecoder, decode_anthropic_event, decode_openai_data,
+    decode_responses_data,
 };
 use crate::translate::{endpoint_url, request_body};
 use crate::types::{
@@ -67,6 +68,7 @@ impl ProviderClient {
             format: request.provider.format,
             openai: OpenAiAcc::default(),
             anthropic: AnthropicAcc::default(),
+            responses: ResponsesAcc::default(),
             pending: std::collections::VecDeque::new(),
             done: false,
         })
@@ -113,6 +115,7 @@ pub struct ProviderStream {
     format: ProviderFormat,
     openai: OpenAiAcc,
     anthropic: AnthropicAcc,
+    responses: ResponsesAcc,
     pending: std::collections::VecDeque<Result<ProviderEvent, ProviderError>>,
     done: bool,
 }
@@ -154,6 +157,11 @@ impl Stream for ProviderStream {
                                 &frame.event,
                                 &frame.data,
                                 &mut this.anthropic,
+                            ),
+                            ProviderFormat::Responses => decode_responses_data(
+                                &frame.event,
+                                &frame.data,
+                                &mut this.responses,
                             ),
                         };
                         for event in events {

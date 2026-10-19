@@ -1,6 +1,6 @@
 import type { Lang } from "./i18n";
 
-export type ProviderFormat = "openai" | "anthropic";
+export type ProviderFormat = "openai" | "anthropic" | "responses";
 
 export interface Provider {
   id: string;
@@ -20,6 +20,7 @@ export interface Provider {
   token_field: "max_tokens" | "max_completion_tokens";
   builtin: boolean;
   model_hints: string[];
+  follow_latest: boolean;
 }
 
 export interface ProviderStore {
@@ -81,6 +82,7 @@ export interface SecretStatus {
   id: string;
   location: "keyring" | "file" | null;
   from_env: boolean;
+  from_session: boolean;
 }
 
 export interface Bootstrap {
@@ -116,10 +118,11 @@ const memory = seed();
 
 function seed(): Bootstrap {
   const providers: Provider[] = [
-    preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY", "bearer", "max_tokens", 128000, ["deepseek-chat", "deepseek-reasoner"], true),
-    preset("kimi", "Moonshot Kimi", "openai", "https://api.moonshot.cn/v1", "moonshot-v1-128k", "MOONSHOT_API_KEY", "bearer", "max_tokens", 128000, ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-latest"], false),
-    preset("openai", "OpenAI-compatible", "openai", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY", "bearer", "max_completion_tokens", 128000, ["gpt-4o", "gpt-4.1"], false),
-    preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "x_api_key", "max_tokens", 200000, ["claude-sonnet-4-5", "claude-opus-4-5"], false),
+    preset("xai", "Grok", "responses", "https://api.x.ai/v1", "grok-4.7", "XAI_API_KEY", "bearer", "max_tokens", 500000, ["grok-4.7", "grok-4.6", "grok-4.5"], true, true),
+    preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY", "bearer", "max_tokens", 128000, ["deepseek-chat", "deepseek-reasoner"], false, false),
+    preset("kimi", "Moonshot Kimi", "openai", "https://api.moonshot.cn/v1", "moonshot-v1-128k", "MOONSHOT_API_KEY", "bearer", "max_tokens", 128000, ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-latest"], false, false),
+    preset("openai", "OpenAI-compatible", "openai", "https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY", "bearer", "max_completion_tokens", 128000, ["gpt-4o", "gpt-4.1"], false, false),
+    preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "ANTHROPIC_API_KEY", "x_api_key", "max_tokens", 200000, ["claude-sonnet-4-5", "claude-opus-4-5"], false, false),
   ];
   const session: Session = {
     id: "demo",
@@ -160,10 +163,10 @@ function seed(): Bootstrap {
       lang: "zh-CN",
       permission: "ask",
       cwd: "/workspace",
-      active_provider: "deepseek",
+      active_provider: "xai",
       disabled_tools: [],
     },
-    providers: { active: "deepseek", providers },
+    providers: { active: "xai", providers },
     sessions: [summary(session)],
     extensions: [
       {
@@ -175,8 +178,9 @@ function seed(): Bootstrap {
     ],
     secrets: providers.map((provider) => ({
       id: provider.id,
-      location: provider.id === "deepseek" ? "file" : null,
+      location: null,
       from_env: false,
+      from_session: provider.id === "xai",
     })),
     grok_binary: null,
     grok_home: "~/.grok",
@@ -195,6 +199,7 @@ function preset(
   context_window: number,
   model_hints: string[],
   enabled: boolean,
+  follow_latest: boolean,
 ): Provider {
   return {
     id,
@@ -203,7 +208,7 @@ function preset(
     base_url,
     model,
     env_key,
-    env_key_fallbacks: id === "kimi" ? ["KIMI_API_KEY"] : [],
+    env_key_fallbacks: id === "kimi" ? ["KIMI_API_KEY"] : id === "xai" ? ["GROK_CODE_XAI_API_KEY"] : [],
     context_window,
     extra_headers: format === "anthropic" ? { "anthropic-version": "2023-06-01" } : {},
     env_http_headers: format === "anthropic" ? { "x-api-key": "ANTHROPIC_API_KEY" } : {},
@@ -214,6 +219,7 @@ function preset(
     token_field,
     builtin: true,
     model_hints,
+    follow_latest,
   };
 }
 
@@ -257,7 +263,10 @@ export async function saveProviders(store: ProviderStore): Promise<ProviderStore
 export async function setSecret(id: string, secret: string): Promise<"keyring" | "file"> {
   if (!inTauri()) {
     const status = memory.secrets.find((item) => item.id === id);
-    if (status) status.location = "file";
+    if (status) {
+      status.location = "file";
+      status.from_session = false;
+    }
     return "file";
   }
   return invoke("set_secret", { id, secret });

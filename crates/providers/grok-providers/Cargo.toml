@@ -23,6 +23,7 @@ keyring = ["dep:keyring"]
 [dependencies]
 base64 = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
@@ -32,6 +33,7 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
+xai-grok-models = { workspace = true }
 keyring = { version = "3", optional = true }
 
 [dev-dependencies]

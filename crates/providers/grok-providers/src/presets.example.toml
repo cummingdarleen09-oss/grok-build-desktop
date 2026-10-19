@@ -1,9 +1,30 @@
-# Example third-party providers. Copy to ~/.grok/providers.toml
+# Example providers. Copy to ~/.grok/providers.toml
 # (or $GROK_HOME/providers.toml). Do not put API keys in this file.
-# Set DEEPSEEK_API_KEY, MOONSHOT_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
-# or a custom env_key, then run `grok-providers sync`.
+#
+# Grok's `model` below is the offline fallback. When follow_latest is true,
+# the desktop app and `grok-providers refresh-models` replace it with the
+# newest general model from GET https://api.x.ai/v1/models. Set XAI_MODEL,
+# or set follow_latest = false, to pin a model. grok-4.6 and grok-4.5 stay
+# selectable either way.
 
-active = "deepseek"
+active = "xai"
+
+[[providers]]
+id = "xai"
+name = "Grok"
+format = "responses"
+base_url = "https://api.x.ai/v1"
+model = "grok-4.7"
+env_key = "XAI_API_KEY"
+env_key_fallbacks = ["GROK_CODE_XAI_API_KEY"]
+context_window = 500000
+auth = "bearer"
+enabled = true
+max_tokens = 8192
+token_field = "max_tokens"
+builtin = true
+follow_latest = true
+model_hints = ["grok-4.7", "grok-4.6", "grok-4.5"]
 
 [[providers]]
 id = "deepseek"
@@ -14,10 +35,11 @@ model = "deepseek-chat"
 env_key = "DEEPSEEK_API_KEY"
 context_window = 128000
 auth = "bearer"
-enabled = true
+enabled = false
 max_tokens = 8192
 token_field = "max_tokens"
 builtin = true
+follow_latest = false
 model_hints = ["deepseek-chat", "deepseek-reasoner"]
 
 [[providers]]
@@ -34,6 +56,7 @@ enabled = false
 max_tokens = 8192
 token_field = "max_tokens"
 builtin = true
+follow_latest = false
 
 [[providers]]
 id = "openai"
@@ -48,6 +71,7 @@ enabled = false
 max_tokens = 8192
 token_field = "max_completion_tokens"
 builtin = true
+follow_latest = false
 
 [[providers]]
 id = "anthropic"
@@ -62,6 +86,7 @@ enabled = false
 max_tokens = 8192
 token_field = "max_tokens"
 builtin = true
+follow_latest = false
 extra_headers = { "anthropic-version" = "2023-06-01" }
 env_http_headers = { "x-api-key" = "ANTHROPIC_API_KEY" }
 
@@ -78,3 +103,4 @@ env_http_headers = { "x-api-key" = "ANTHROPIC_API_KEY" }
 # max_tokens = 4096
 # token_field = "max_tokens"
 # builtin = false
+# follow_latest = false

@@ -18,6 +18,7 @@ pub struct Preset {
     pub extra_headers: &'static [(&'static str, &'static str)],
     pub env_http_headers: &'static [(&'static str, &'static str)],
     pub model_hints: &'static [&'static str],
+    pub follow_latest: bool,
 }
 
 impl Preset {
@@ -44,6 +45,7 @@ impl Preset {
             token_field: self.token_field,
             builtin: true,
             model_hints: self.model_hints.iter().map(|s| (*s).to_string()).collect(),
+            follow_latest: self.follow_latest,
         }
     }
 }
@@ -62,6 +64,22 @@ fn pairs(items: &[(&str, &str)]) -> BTreeMap<String, String> {
 pub fn builtin_presets() -> &'static [Preset] {
     const PRESETS: &[Preset] = &[
         Preset {
+            id: "xai",
+            name: "Grok",
+            format: ProviderFormat::Responses,
+            base_url: "https://api.x.ai/v1",
+            model: "grok-4.7",
+            env_key: "XAI_API_KEY",
+            env_key_fallbacks: &["GROK_CODE_XAI_API_KEY"],
+            context_window: 500_000,
+            auth: AuthStyle::Bearer,
+            token_field: TokenField::MaxTokens,
+            extra_headers: &[],
+            env_http_headers: &[],
+            model_hints: &["grok-4.7", "grok-4.6", "grok-4.5"],
+            follow_latest: true,
+        },
+        Preset {
             id: "deepseek",
             name: "DeepSeek",
             format: ProviderFormat::OpenAi,
@@ -75,6 +93,7 @@ pub fn builtin_presets() -> &'static [Preset] {
             extra_headers: &[],
             env_http_headers: &[],
             model_hints: &["deepseek-chat", "deepseek-reasoner"],
+            follow_latest: false,
         },
         Preset {
             id: "kimi",
@@ -95,6 +114,7 @@ pub fn builtin_presets() -> &'static [Preset] {
                 "moonshot-v1-128k",
                 "kimi-latest",
             ],
+            follow_latest: false,
         },
         Preset {
             id: "openai",
@@ -110,6 +130,7 @@ pub fn builtin_presets() -> &'static [Preset] {
             extra_headers: &[],
             env_http_headers: &[],
             model_hints: &["gpt-4o", "gpt-4.1", "o3"],
+            follow_latest: false,
         },
         Preset {
             id: "anthropic",
@@ -125,6 +146,7 @@ pub fn builtin_presets() -> &'static [Preset] {
             extra_headers: &[("anthropic-version", "2023-06-01")],
             env_http_headers: &[("x-api-key", "ANTHROPIC_API_KEY")],
             model_hints: &["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+            follow_latest: false,
         },
     ];
     PRESETS
@@ -135,14 +157,14 @@ pub fn preset_by_id(id: &str) -> Option<&'static Preset> {
 }
 
 pub fn default_store() -> crate::types::ProviderStore {
-    crate::types::ProviderStore {
-        active: None,
+    normalize_store(crate::types::ProviderStore {
+        active: Some("xai".to_string()),
         providers: builtin_presets()
             .iter()
             .copied()
-            .map(|preset| preset.to_config(false))
+            .map(|preset| preset.to_config(preset.id == "xai"))
             .collect(),
-    }
+    })
 }
 
 /// Append any built-in preset the file does not mention yet, so upgrades surface
@@ -154,15 +176,16 @@ pub fn normalize_store(mut store: crate::types::ProviderStore) -> crate::types::
             .iter()
             .any(|provider| provider.id == preset.id)
         {
-            store.providers.push(preset.to_config(false));
+            store.providers.push(preset.to_config(preset.id == "xai"));
         }
     }
-    if store
+    let active_missing = store
         .active
         .as_deref()
-        .is_some_and(|id| !store.providers.iter().any(|provider| provider.id == id))
-    {
-        store.active = None;
+        .is_none_or(|id| !store.providers.iter().any(|provider| provider.id == id));
+    if active_missing && store.providers.iter().any(|provider| provider.id == "xai") {
+        store.active = Some("xai".to_string());
     }
+    crate::xai_models::apply_known_models(&mut store);
     store
 }

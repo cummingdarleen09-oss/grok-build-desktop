@@ -16,8 +16,9 @@ use grok_desktop_core::{
     load_settings, run_turn, save_session, save_settings, tr,
 };
 use grok_providers::{
-    ProviderClient, ProviderConfig, ProviderStore, SecretLocation, SecretStore, Turn,
-    load_or_default_store, normalize_store, save_provider_store, sync_cli_config,
+    ProviderClient, ProviderConfig, ProviderStore, SecretLocation, SecretStore, Turn, apply_choice,
+    has_login_session, load_or_default_store, normalize_store, refresh_xai_models,
+    save_provider_store, sync_cli_config,
 };
 use pty::PtySession;
 use serde::Serialize;
@@ -37,6 +38,7 @@ struct SecretStatus {
     id: String,
     location: Option<&'static str>,
     from_env: bool,
+    from_session: bool,
 }
 
 #[derive(Serialize)]
@@ -74,12 +76,28 @@ fn secret_status(secrets: &SecretStore, provider: &ProviderConfig) -> SecretStat
         id: provider.id.clone(),
         location,
         from_env,
+        from_session: provider.id == "xai" && has_login_session(),
     }
 }
 
 #[tauri::command]
-fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
-    let providers = load_or_default_store();
+async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
+    let mut providers = load_or_default_store();
+    if let Some(xai) = providers
+        .providers
+        .iter()
+        .find(|provider| provider.id == "xai")
+        .cloned()
+    {
+        let key = state.secrets.resolve(&xai, None).ok().flatten();
+        let choice = refresh_xai_models(&xai.base_url, key.as_deref()).await;
+        let before = providers.clone();
+        apply_choice(&mut providers, &choice);
+        if providers != before {
+            let _ = save_provider_store(&providers);
+            let _ = sync_cli_config(&providers.providers);
+        }
+    }
     let secrets = providers
         .providers
         .iter()

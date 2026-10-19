@@ -274,6 +274,121 @@ pub fn decode_anthropic_event(
     events
 }
 
+#[derive(Debug, Default)]
+pub struct ResponsesAcc {
+    saw_tool: bool,
+}
+
+/// Responses API SSE (`response.output_text.delta`, function-call items, usage).
+pub fn decode_responses_data(
+    event: &str,
+    data: &str,
+    state: &mut ResponsesAcc,
+) -> Vec<ProviderEvent> {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return Vec::new();
+    };
+    let kind = if event.is_empty() {
+        value.get("type").and_then(Value::as_str).unwrap_or("")
+    } else {
+        event
+    };
+    let mut events = Vec::new();
+    match kind {
+        "response.output_text.delta" => {
+            if let Some(text) = value.get("delta").and_then(Value::as_str) {
+                if !text.is_empty() {
+                    events.push(ProviderEvent::Text {
+                        text: text.to_string(),
+                    });
+                }
+            }
+        }
+        "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+            if let Some(text) = value.get("delta").and_then(Value::as_str) {
+                if !text.is_empty() {
+                    events.push(ProviderEvent::Reasoning {
+                        text: text.to_string(),
+                    });
+                }
+            }
+        }
+        "response.output_item.added" => {
+            let item = value.get("item");
+            if item
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str)
+                == Some("function_call")
+            {
+                let index = value
+                    .get("output_index")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32;
+                let id = item
+                    .and_then(|item| item.get("call_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let name = item
+                    .and_then(|item| item.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                state.saw_tool = true;
+                events.push(ProviderEvent::ToolStart {
+                    index,
+                    id: id.to_string(),
+                    name: name.to_string(),
+                });
+                if let Some(arguments) = item
+                    .and_then(|item| item.get("arguments"))
+                    .and_then(Value::as_str)
+                {
+                    if !arguments.is_empty() {
+                        events.push(ProviderEvent::ToolArgs {
+                            index,
+                            fragment: arguments.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        "response.function_call_arguments.delta" => {
+            let index = value
+                .get("output_index")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32;
+            if let Some(fragment) = value.get("delta").and_then(Value::as_str) {
+                if !fragment.is_empty() {
+                    state.saw_tool = true;
+                    events.push(ProviderEvent::ToolArgs {
+                        index,
+                        fragment: fragment.to_string(),
+                    });
+                }
+            }
+        }
+        "response.completed" | "response.incomplete" => {
+            if let Some(usage) = value.pointer("/response/usage") {
+                events.push(ProviderEvent::Usage {
+                    input_tokens: json_u64(usage.get("input_tokens")),
+                    output_tokens: json_u64(usage.get("output_tokens")),
+                });
+            }
+            let incomplete = kind == "response.incomplete"
+                || value.pointer("/response/status").and_then(Value::as_str) == Some("incomplete");
+            let reason = if state.saw_tool {
+                StopReason::ToolUse
+            } else if incomplete {
+                StopReason::Length
+            } else {
+                StopReason::Stop
+            };
+            events.push(ProviderEvent::Stop { reason });
+        }
+        _ => {}
+    }
+    events
+}
+
 fn map_anthropic_stop(reason: &str) -> StopReason {
     match reason {
         "end_turn" | "stop_sequence" => StopReason::Stop,
@@ -419,6 +534,39 @@ mod tests {
         assert_eq!(build.output_tokens, 20);
         let call = build.tool_calls.get(&2).unwrap();
         assert_eq!(call.id, "toolu_1");
+        assert_eq!(call.name, "read_file");
+        assert_eq!(call.arguments, "{\"path\":\"a.rs\"}");
+    }
+
+    #[test]
+    fn responses_sse_parses_text_reasoning_and_function_calls() {
+        let raw = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n",
+            "event: response.reasoning_text.delta\n",
+            "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"plan\"}\n\n",
+            "event: response.output_item.added\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"\"}}\n\n",
+            "event: response.function_call_arguments.delta\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":9,\"output_tokens\":4}}}\n\n",
+        );
+        let mut decoder = SseDecoder::default();
+        let mut state = ResponsesAcc::default();
+        let mut build = AssistantBuild::default();
+        for frame in decoder.push(raw) {
+            for event in decode_responses_data(&frame.event, &frame.data, &mut state) {
+                build.apply(event);
+            }
+        }
+        assert_eq!(build.text, "Hi");
+        assert_eq!(build.reasoning, "plan");
+        assert_eq!(build.stop, Some(StopReason::ToolUse));
+        assert_eq!(build.input_tokens, 9);
+        assert_eq!(build.output_tokens, 4);
+        let call = build.tool_calls.get(&1).unwrap();
+        assert_eq!(call.id, "call_1");
         assert_eq!(call.name, "read_file");
         assert_eq!(call.arguments, "{\"path\":\"a.rs\"}");
     }
