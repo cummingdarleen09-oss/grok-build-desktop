@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
   type Automation,
   type Bootstrap,
+  type DiagnosticsInfo,
   type ExtensionRecord,
   type GitInfo,
   type MediaFile,
@@ -13,10 +14,18 @@ import {
   type Settings,
   branchChat,
   cancelPrompt,
+  checkReady,
+  copyText,
   createChat,
+  diagnosticsInfo,
   gitInfo,
+  listChats,
   loadAutomations,
   loadBootstrap,
+  logFrontend,
+  onProvidersUpdated,
+  openLogFolder,
+  readLogs,
   openChat,
   openClassic,
   pickProjectFolder,
@@ -36,6 +45,20 @@ import { ProvidersPanel } from "./ProvidersPanel";
 
 type Page = "chat" | "automations" | "kanban" | "media" | "customize" | "settings" | "shortcuts";
 type Hist = { page: Page; sessionId: string | null; readOnly: boolean };
+/** An error shown to the user. `settings` adds an Open Settings action for configuration problems. */
+type Problem = { text: string; settings: boolean };
+type SetError = (error: string | null, settings?: boolean) => void;
+const SIDEBAR_PAGE = 40;
+
+function describe(reason: unknown): string {
+  if (reason instanceof Error) return reason.message || String(reason);
+  if (typeof reason === "string") return reason;
+  try {
+    return JSON.stringify(reason) ?? String(reason);
+  } catch {
+    return String(reason);
+  }
+}
 const TOOLS = ["read_file", "write_file", "search_replace", "grep", "list_dir", "run_terminal"] as const;
 
 function computeNextRun(item: Automation, from: Date): string {
@@ -60,7 +83,8 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [readOnly, setReadOnly] = useState(false);
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
+  const [bootFailed, setBootFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState(false);
   const [sidebar, setSidebar] = useState(true);
@@ -72,9 +96,11 @@ export function App() {
   const [more, setMore] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [shown, setShown] = useState<Record<string, number>>({});
   const [git, setGit] = useState<GitInfo>({ current: "main", branches: ["main"] });
   const [branchName, setBranchName] = useState("main");
   const [picked, setPicked] = useState<{ providerId: string; model: string } | null>(null);
+  const [waiting, setWaiting] = useState(false);
   const [canBack, setCanBack] = useState(false);
   const [canForward, setCanForward] = useState(false);
   const bootRef = useRef<Bootstrap | null>(null);
@@ -85,6 +111,10 @@ export function App() {
   bootRef.current = boot;
   sessionRef.current = session;
 
+  const setError: SetError = (text, settings = false) => {
+    if (text) logFrontend("warn", text);
+    setProblem(text ? { text, settings } : null);
+  };
   const lang: Lang = boot?.settings.lang === "en" ? "en" : "zh-CN";
   const t = (key: Key) => translate(lang, key);
   const theme = boot?.settings.theme === "dark" ? "dark" : "light";
@@ -93,18 +123,54 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  async function refresh(openId?: string) {
-    const next = await loadBootstrap();
-    setBoot(next);
-    const id = openId ?? sessionRef.current?.id;
-    if (id && next.sessions.some((item) => item.id === id && item.origin !== "classic")) {
+  async function start() {
+    setBootFailed(null);
+    const started = performance.now();
+    try {
+      const next = await loadBootstrap();
+      setBoot(next);
+      logFrontend("info", `bootstrap rendered in ${Math.round(performance.now() - started)} ms`);
+    } catch (reason) {
+      const text = describe(reason);
+      logFrontend("error", `bootstrap failed: ${text}`);
+      setBootFailed(text);
+    }
+  }
+
+  /** Re-read the chat list only. The full bootstrap also rescans extensions and providers. */
+  async function refreshChats(openId?: string) {
+    const sessions = await listChats();
+    setBoot((current) => current ? { ...current, sessions } : current);
+    if (openId && sessions.some((item) => item.id === openId && item.origin !== "classic")) {
       setReadOnly(false);
-      setSession(await openChat(id));
+      setSession(await openChat(openId));
     }
   }
 
   useEffect(() => {
-    refresh().catch((reason: unknown) => setError(String(reason)));
+    void start();
+    const onRejection = (event: PromiseRejectionEvent) => {
+      const text = describe(event.reason);
+      logFrontend("error", `unhandled rejection: ${text}`);
+      setProblem({ text, settings: false });
+    };
+    const onError = (event: ErrorEvent) => {
+      logFrontend("error", `uncaught: ${event.message} at ${event.filename}:${event.lineno}`);
+      setProblem({ text: event.message || "error", settings: false });
+    };
+    window.addEventListener("unhandledrejection", onRejection);
+    window.addEventListener("error", onError);
+    let stop: (() => void) | undefined;
+    let closed = false;
+    void onProvidersUpdated((update) => {
+      setBoot((current) => current ? { ...current, providers: update.providers, secrets: update.secrets } : current);
+    }).then((unlisten) => { if (closed) unlisten(); else stop = unlisten; }).catch(() => undefined);
+    return () => {
+      closed = true;
+      stop?.();
+      window.removeEventListener("unhandledrejection", onRejection);
+      window.removeEventListener("error", onError);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -153,12 +219,13 @@ export function App() {
       }
       for (const item of due) {
         if (stopped) return;
-        await launchAutomation(item, false);
+        await launchAutomation(item, false).catch((reason: unknown) => setError(`${item.title}: ${describe(reason)}`));
       }
     }
     if (!boot) return;
-    const timer = window.setInterval(() => void tick(), 30000);
-    void tick();
+    const run = () => void tick().catch((reason: unknown) => logFrontend("warn", `automations: ${describe(reason)}`));
+    const timer = window.setInterval(run, 30000);
+    run();
     return () => { stopped = true; window.clearInterval(timer); };
   }, [boot == null]);
 
@@ -216,20 +283,29 @@ export function App() {
     setMore(false);
   }
 
+  /** The chat to send into, or null after showing why nothing can be sent. */
   async function ensureChat(): Promise<Session | null> {
-    if (!boot) return null;
-    if (session && !readOnly) return session;
-    const chosen = boot.providers.providers.find((item) => item.id === picked?.providerId && item.enabled);
-    const provider = chosen ?? activeProvider(boot);
-    if (!provider) {
-      setPage("settings");
+    const current = bootRef.current;
+    if (!current) return null;
+    const existing = session && !readOnly ? session : null;
+    const chosen = current.providers.providers.find((item) => item.id === picked?.providerId && item.enabled);
+    const provider = existing ? undefined : chosen ?? activeProvider(current);
+    if (!existing && !provider) {
+      setError(t("chat.noProvider"), true);
       return null;
     }
-    const model = picked && picked.providerId === provider.id ? picked.model : provider.model;
-    const created = await createChat(boot.settings.cwd, provider.id, model, lang);
+    try {
+      await checkReady(existing ? existing.provider_id : provider!.id);
+    } catch (reason) {
+      setError(describe(reason), true);
+      return null;
+    }
+    if (existing) return existing;
+    const model = picked && picked.providerId === provider!.id ? picked.model : provider!.model;
+    const created = await createChat(current.settings.cwd, provider!.id, model, lang);
     setSession(created);
     setReadOnly(false);
-    await refresh(created.id);
+    void refreshChats().catch(() => undefined);
     return created;
   }
 
@@ -261,7 +337,7 @@ export function App() {
       if (!entry.sessionId) setSession(null);
       else setSession(entry.readOnly ? await openClassic(entry.sessionId) : await openChat(entry.sessionId));
     } catch (reason) {
-      setError(String(reason));
+      setError(describe(reason));
     } finally {
       applyingHist.current = false;
     }
@@ -274,7 +350,13 @@ export function App() {
     const providerId = item.provider_id || current.settings.active_provider || "xai";
     const provider = current.providers.providers.find((entry) => entry.id === providerId) ?? activeProvider(current);
     if (!provider) {
-      setPage("settings");
+      setError(t("chat.noProvider"), true);
+      return;
+    }
+    try {
+      await checkReady(provider.id);
+    } catch (reason) {
+      setError(`${item.title}: ${describe(reason)}`, true);
       return;
     }
     if (focus) await patchSettings({ cwd, active_provider: provider.id });
@@ -289,7 +371,7 @@ export function App() {
               const next = await sendPrompt(created.id, item.prompt, () => undefined, false, created.model);
       if (focus) setSession(next);
       else setNotice(item.title);
-      await refresh(focus ? next.id : undefined);
+      await refreshChats();
     } finally {
       if (focus) setBusy(false);
     }
@@ -316,7 +398,23 @@ export function App() {
     setSession(await openChat(item.id));
   }
 
-  if (!boot) return <div className="page">{error ?? "…"}</div>;
+  if (!boot) {
+    const zh = !navigator.language.toLowerCase().startsWith("en");
+    const say = (key: Key) => translate(zh ? "zh-CN" : "en", key);
+    return (
+      <div className="page boot-state">
+        {bootFailed ? <>
+          <h1>{say("boot.failed")}</h1>
+          <pre className="boot-error">{bootFailed}</pre>
+          <div className="row">
+            <button className="primary" onClick={() => void start()}>{say("boot.retry")}</button>
+            <button className="ghost" onClick={() => void readLogs().then(copyText).catch(() => undefined)}>{say("diag.copy")}</button>
+            <button className="ghost" onClick={() => void openLogFolder().catch(() => undefined)}>{say("diag.open")}</button>
+          </div>
+        </> : <p className="hint">{say("boot.loading")}</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="app" onClick={() => { setMenu(null); }}>
@@ -387,12 +485,17 @@ export function App() {
                     <strong>{projectLeaf(group.path)}</strong>
                   </button>
                   {open && group.sessions.length === 0 && <div className="hint" style={{ paddingLeft: 28 }}>{t("repo.empty")}</div>}
-                  {open && group.sessions.map((item, index) => (
-                    <button key={`${item.origin}-${item.id}`} className={session?.id === item.id ? "chat-row active" : "chat-row"} onClick={() => void openListed(item).catch((reason: unknown) => setError(String(reason)))}>
+                  {open && group.sessions.slice(0, shown[group.path] ?? SIDEBAR_PAGE).map((item, index) => (
+                    <button key={`${item.origin}-${item.id}`} className={session?.id === item.id ? "chat-row active" : "chat-row"} onClick={() => void openListed(item).catch((reason: unknown) => setError(describe(reason)))}>
                       <span>{item.origin === "classic" ? "◌ " : item.parent_session_id ? "↳ " : ""}{item.title}</span>
                       {cursor + index < 9 && <kbd className="kbd">Ctrl+{cursor + index + 1}</kbd>}
                     </button>
                   ))}
+                  {open && group.sessions.length > (shown[group.path] ?? SIDEBAR_PAGE) && (
+                    <button className="chat-row more-row" onClick={() => setShown((current) => ({ ...current, [group.path]: (current[group.path] ?? SIDEBAR_PAGE) + SIDEBAR_PAGE * 4 }))}>
+                      <span>{t("repo.more")} ({group.sessions.length - (shown[group.path] ?? SIDEBAR_PAGE)})</span>
+                    </button>
+                  )}
                 </section>
               );
             })}
@@ -414,14 +517,15 @@ export function App() {
                 <button onClick={() => { setMore(false); setPage("kanban"); }}>{t("nav.kanban")}</button>
                 <button onClick={() => { setMore(false); setPage("media"); }}>{t("nav.media")}</button>
                 <button onClick={() => { setMore(false); setPage("settings"); }}>{t("nav.settings")}</button>
-                {session && !readOnly && <button onClick={() => { const title = window.prompt(t("chat.rename"), session.title); setMore(false); if (title) void renameChat(session.id, title).then((next) => { setSession(next); return refresh(next.id); }); }}>{t("chat.rename")}</button>}
-                {session && !readOnly && <button onClick={() => { setMore(false); void removeChat(session.id).then(() => { setSession(null); return refresh(); }); }}>{t("chat.delete")}</button>}
+                {session && !readOnly && <button onClick={() => { const title = window.prompt(t("chat.rename"), session.title); setMore(false); if (title) void renameChat(session.id, title).then((next) => { setSession(next); return refreshChats(); }).catch((reason: unknown) => setError(describe(reason))); }}>{t("chat.rename")}</button>}
+                {session && !readOnly && <button onClick={() => { setMore(false); void removeChat(session.id).then(() => { setSession(null); return refreshChats(); }).catch((reason: unknown) => setError(describe(reason))); }}>{t("chat.delete")}</button>}
               </div>
             )}
           </div>
-          {error && <div className="banner" onClick={() => setError(null)}>{error}</div>}
+          {problem && page !== "chat" && <ErrorNote t={t} problem={problem} onDismiss={() => setError(null)} onSettings={() => { setError(null); setPage("settings"); }} />}
           {notice && <div className="banner" onClick={() => setNotice(null)}>{notice}</div>}
-          {page === "chat" && (
+          {waiting && page !== "chat" && <button className="banner banner-action" onClick={() => setPage("chat")}>{t("chat.approvalWaiting")}</button>}
+          <div className={page === "chat" ? "chat-host" : "chat-host is-hidden"}>
             <ChatStage
               t={t}
               lang={lang}
@@ -436,8 +540,11 @@ export function App() {
               setBranchName={setBranchName}
               focusMessageId={focusMessageId}
               setBusy={setBusy}
+              problem={problem}
               setError={setError}
               setNotice={setNotice}
+              setWaiting={setWaiting}
+              onSettings={() => { setError(null); setPage("settings"); }}
               onEnsure={ensureChat}
               onOpen={(id, messageId) => void openListed(boot.sessions.find((item) => item.id === id) ?? { id, title: id, model: "", provider_id: "", cwd: boot.settings.cwd, updated_at: "", origin: "desktop" }).then(() => messageId && setFocusMessageId(messageId))}
               onBranch={async (messageId, includeMessage, replacement) => {
@@ -450,20 +557,27 @@ export function App() {
                   try {
                     const next = await sendPrompt(created.id, replacement.trim(), () => undefined, plan, created.model);
                     setSession(next);
-                    await refresh(next.id);
+                  } catch (reason) {
+                    setError(describe(reason));
+                    setSession(await openChat(created.id));
                   } finally { setBusy(false); }
-                } else await refresh(created.id);
+                }
+                await refreshChats();
               }}
-              onSession={async (next) => { setSession(next); setBoot(await loadBootstrap()); }}
+              onSession={async (next) => { setSession(next); await refreshChats(); }}
               onProvider={async (providerId, model) => {
                 setPicked({ providerId, model });
-                await patchSettings({ active_provider: providerId });
-                if (session && !readOnly) {
-                  setSession(await setChatModel(session.id, providerId, model));
+                try {
+                  await patchSettings({ active_provider: providerId });
+                  if (session && !readOnly) {
+                    setSession(await setChatModel(session.id, providerId, model));
+                  }
+                } catch (reason) {
+                  setError(describe(reason));
                 }
               }}
             />
-          )}
+          </div>
           {page === "settings" && <SettingsView t={t} boot={boot} onSaved={(settings, providers) => setBoot({ ...boot, settings, providers })} setError={setError} />}
           {page === "customize" && <Customize t={t} records={boot.extensions} settings={boot.settings} onSettings={(settings) => setBoot({ ...boot, settings })} setError={setError} />}
           {page === "automations" && <Automations t={t} boot={boot} onRun={(item) => launchAutomation(item, true)} />}
@@ -504,6 +618,18 @@ function Icon(props: { d: string }) {
   );
 }
 
+function ErrorNote(props: { t: (key: Key) => string; problem: Problem; onDismiss: () => void; onSettings: () => void }) {
+  return (
+    <div className="error-note" role="alert">
+      <span className="error-note__text">{props.problem.text}</span>
+      <span className="error-note__actions">
+        {props.problem.settings && <button type="button" className="primary" onClick={props.onSettings}>{props.t("chat.openSettings")}</button>}
+        <button type="button" className="ghost" aria-label={props.t("chat.dismiss")} title={props.t("chat.dismiss")} onClick={props.onDismiss}>✕</button>
+      </span>
+    </div>
+  );
+}
+
 function ChatStage(props: {
   t: (key: Key) => string;
   lang: Lang;
@@ -518,8 +644,11 @@ function ChatStage(props: {
   setBranchName: (value: string) => void;
   focusMessageId: string | null;
   setBusy: (busy: boolean) => void;
-  setError: (error: string | null) => void;
+  problem: Problem | null;
+  setError: SetError;
   setNotice: (notice: string | null) => void;
+  setWaiting: (waiting: boolean) => void;
+  onSettings: () => void;
   onEnsure: () => Promise<Session | null>;
   onOpen: (id: string, messageId?: string | null) => void;
   onBranch: (messageId: string, includeMessage: boolean, replacement?: string) => Promise<void>;
@@ -533,15 +662,24 @@ function ChatStage(props: {
   const queueRef = useRef<string[]>([]);
   const [live, setLive] = useState("");
   const [reasoning, setReasoning] = useState("");
+  const [status, setStatus] = useState<string[]>([]);
   const [tools, setTools] = useState<Session["messages"][number]["tool_calls"]>([]);
   const [approval, setApproval] = useState<{ id: string; name: string; arguments: string } | null>(null);
   const [allowed, setAllowed] = useState<string[]>([]);
+  const allowedRef = useRef<string[]>([]);
+  allowedRef.current = allowed;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const provider = props.session
     ? props.boot.providers.providers.find((item) => item.id === props.session?.provider_id) ?? activeProvider(props.boot)
     : activeProvider(props.boot);
+  const dark = props.boot.settings.theme === "dark";
+  const { setWaiting } = props;
+
+  useEffect(() => {
+    setWaiting(approval != null);
+  }, [approval, setWaiting]);
 
   useEffect(() => {
     if (props.focusMessageId) {
@@ -549,7 +687,12 @@ function ChatStage(props: {
       return;
     }
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [session, live, tools, approval, props.focusMessageId]);
+  }, [session, live, tools, approval, status, props.focusMessageId]);
+
+  function answer(id: string, approved: boolean) {
+    setApproval(null);
+    resolveApproval(id, approved).catch((reason: unknown) => props.setError(describe(reason)));
+  }
 
   async function send(text: string) {
     const trimmed = text.trim();
@@ -562,44 +705,58 @@ function ChatStage(props: {
     }
     busyRef.current = true;
     props.setBusy(true);
-    const target = await props.onEnsure();
-    if (!target) {
-      busyRef.current = false;
-      props.setBusy(false);
-      setDraft(trimmed);
-      return;
-    }
-    setDraft("");
-    setLive("");
-    setReasoning("");
-    setTools([]);
     props.setError(null);
-    const onEvent = (event: AgentEvent) => {
-      if (event.type === "text_delta") setLive((value) => value + event.text);
-      if (event.type === "reasoning_delta") setReasoning((value) => value + event.text);
-      if (event.type === "approval_needed") {
-        if (allowed.includes(event.name)) void resolveApproval(event.id, true);
-        else setApproval({ id: event.id, name: event.name, arguments: event.arguments });
-      }
-      if (event.type === "tool_started") {
-        setApproval(null);
-        setTools((current) => [...current.filter((tool) => tool.id !== event.id), { id: event.id, name: event.name, arguments: event.arguments, output: null, is_error: false }]);
-      }
-      if (event.type === "tool_finished") {
-        setTools((current) => current.map((tool) => tool.id === event.id ? { ...tool, output: event.output, is_error: event.is_error } : tool));
-      }
-      if (event.type === "error") props.setError(event.message);
-    };
+    let target: Session | null = null;
     try {
-      const next = await sendPrompt(target.id, text.trim(), onEvent, props.plan, target.model);
+      target = await props.onEnsure();
+      if (!target) {
+        setDraft(trimmed);
+        return;
+      }
+      setDraft("");
       setLive("");
       setReasoning("");
+      setStatus([]);
       setTools([]);
-      setApproval(null);
+      const onEvent = (event: AgentEvent) => {
+        if (event.type === "text_delta") setLive((value) => value + event.text);
+        if (event.type === "reasoning_delta") setReasoning((value) => value + event.text);
+        if (event.type === "status") setStatus((current) => [...current.filter((line) => line !== event.text), event.text]);
+        if (event.type === "approval_needed") {
+          if (allowedRef.current.includes(event.name)) void resolveApproval(event.id, true).catch(() => undefined);
+          else setApproval({ id: event.id, name: event.name, arguments: event.arguments });
+        }
+        if (event.type === "tool_started") {
+          setApproval(null);
+          setTools((current) => [...current.filter((tool) => tool.id !== event.id), { id: event.id, name: event.name, arguments: event.arguments, output: null, is_error: false }]);
+        }
+        if (event.type === "tool_finished") {
+          setTools((current) => current.map((tool) => tool.id === event.id ? { ...tool, output: event.output, is_error: event.is_error } : tool));
+        }
+        if (event.type === "error") props.setError(event.message);
+      };
+      const next = await sendPrompt(target.id, trimmed, onEvent, props.plan, target.model);
       await props.onSession(next);
     } catch (reason) {
-      props.setError(String(reason));
+      props.setError(describe(reason));
+      if (target) {
+        // The backend saves what it already has (the prompt, any partial reply).
+        // Show that, and give the text back if the prompt never reached the chat.
+        const failed = target;
+        const reloaded = await openChat(failed.id).catch(() => null);
+        if (reloaded) await props.onSession(reloaded).catch(() => undefined);
+        const asked = reloaded?.messages.filter((message) => message.role === "user") ?? [];
+        const last = asked[asked.length - 1];
+        if (!last || last.text.trim() !== trimmed) setDraft((value) => value || trimmed);
+      } else {
+        setDraft((value) => value || trimmed);
+      }
     } finally {
+      setLive("");
+      setReasoning("");
+      setStatus([]);
+      setTools([]);
+      setApproval(null);
       busyRef.current = false;
       props.setBusy(false);
       const follow = queueRef.current[0];
@@ -611,7 +768,20 @@ function ChatStage(props: {
     }
   }
 
+  const branchesOf = useMemo(() => {
+    const map = new Map<string, SessionSummary[]>();
+    if (!session) return map;
+    for (const item of props.boot.sessions) {
+      if (item.parent_session_id !== session.id || !item.branched_from_message_id) continue;
+      const list = map.get(item.branched_from_message_id) ?? [];
+      list.push(item);
+      map.set(item.branched_from_message_id, list);
+    }
+    return map;
+  }, [props.boot.sessions, session]);
+
   const empty = !session || (session.messages.length === 0 && !props.busy);
+  const note = props.problem && <ErrorNote t={t} problem={props.problem} onDismiss={() => props.setError(null)} onSettings={props.onSettings} />;
   const composer = (
     <Composer
       t={t}
@@ -634,20 +804,47 @@ function ChatStage(props: {
         const path = window.prompt("@");
         if (path) setDraft((value) => `${value}${value ? " " : ""}@${path}`);
       }}
-      onMic={() => props.setNotice(t("chat.mic"))}
       onSlash={() => setDraft("/create-skill ")}
     />
   );
+
+  // Streaming re-renders this component per token; the finished messages do not change meanwhile.
+  const transcript = useMemo(() => session?.messages.map((message, index) => {
+    const branches = branchesOf.get(message.id) ?? [];
+    return (
+      <article key={message.id} id={`message-${message.id}`} className={`bubble ${message.role}`}>
+        <div className="who">{message.role === "user" ? t("chat.you") : session.model} <span>#{index + 1}</span></div>
+        {message.reasoning && <details className="reasoning"><summary>{t("chat.reasoning")}</summary><pre>{message.reasoning}</pre></details>}
+        {editingId === message.id ? <textarea value={editText} onChange={(event) => setEditText(event.target.value)} /> : message.text && <MessageBody text={message.text} dark={dark} />}
+        {message.tool_calls.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
+        {!props.readOnly && (
+          <div className="msg-actions">
+            <button type="button" className="icon-btn" title={t("chat.copy")} aria-label={t("chat.copy")} onClick={() => void copyText(message.text).catch(() => undefined)}>
+              <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+            </button>
+            <button type="button" className="icon-btn" title={t("chat.branch")} aria-label={t("chat.branch")} disabled={props.busy} onClick={() => void props.onBranch(message.id, true).catch((reason: unknown) => props.setError(describe(reason)))}>
+              <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden><circle cx="6" cy="6" r="2.2" /><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M6 8.2v7.6M18 8.2a8 8 0 0 1-8 8" /></svg>
+            </button>
+            {message.role === "user" && editingId !== message.id && <button type="button" className="icon-btn" title={t("chat.edit")} aria-label={t("chat.edit")} disabled={props.busy} onClick={() => { setEditingId(message.id); setEditText(message.text); }}>{t("chat.edit")}</button>}
+            {editingId === message.id && <button type="button" className="primary" disabled={props.busy || !editText.trim()} onClick={() => { const text = editText; setEditingId(null); void props.onBranch(message.id, false, text).catch((reason: unknown) => props.setError(describe(reason))); }}>{t("chat.resend")}</button>}
+          </div>
+        )}
+        {branches.length > 0 && <div className="branch-list"><span>{t("chat.branches")}</span>{branches.map((item) => <button key={item.id} type="button" onClick={() => props.onOpen(item.id)}>{item.title}</button>)}</div>}
+      </article>
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [session, branchesOf, editingId, editText, props.busy, props.readOnly, dark, props.lang]);
 
   if (empty && !props.readOnly) {
     return (
       <div className="center-col">
         <div className="composer-wrap">
           {props.plan && <p className="hint">{t("chat.planOn")}</p>}
+          {note}
           {composer}
           <div className="pills">
             <button className={props.plan ? "pill-btn on" : "pill-btn"} onClick={() => props.setPlan((value) => !value)}>{t("chat.plan")} ⇧Tab</button>
-            <button className="pill-btn" onClick={() => void props.onEnsure()}>{t("chat.multitask")}</button>
+            <button className="pill-btn" onClick={() => void props.onEnsure().catch((reason: unknown) => props.setError(describe(reason)))}>{t("chat.multitask")}</button>
           </div>
         </div>
         <div className="suggests">
@@ -677,35 +874,13 @@ function ChatStage(props: {
             {branchBanner(props.lang, parentTitle(props.boot, session.parent_session_id), session.branched_at_index)}
           </button>
         )}
-        {session?.messages.map((message, index) => {
-          const branches = props.boot.sessions.filter((item) => item.parent_session_id === session.id && item.branched_from_message_id === message.id);
-          return (
-            <article key={message.id} id={`message-${message.id}`} className={`bubble ${message.role}`}>
-              <div className="who">{message.role === "user" ? t("chat.you") : session.model} <span>#{index + 1}</span></div>
-              {message.reasoning && <details className="reasoning"><summary>{t("chat.reasoning")}</summary><pre>{message.reasoning}</pre></details>}
-              {editingId === message.id ? <textarea value={editText} onChange={(event) => setEditText(event.target.value)} /> : message.text && <MessageBody text={message.text} dark={props.boot.settings.theme === "dark"} />}
-              {message.tool_calls.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
-              {!props.readOnly && (
-                <div className="msg-actions">
-                  <button type="button" className="icon-btn" title={t("chat.copy")} aria-label={t("chat.copy")} onClick={() => void navigator.clipboard?.writeText(message.text).catch(() => undefined)}>
-                    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                  </button>
-                  <button type="button" className="icon-btn" title={t("chat.branch")} aria-label={t("chat.branch")} disabled={props.busy} onClick={() => void props.onBranch(message.id, true).catch((reason: unknown) => props.setError(String(reason)))}>
-                    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden><circle cx="6" cy="6" r="2.2" /><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M6 8.2v7.6M18 8.2a8 8 0 0 1-8 8" /></svg>
-                  </button>
-                  {message.role === "user" && editingId !== message.id && <button type="button" className="icon-btn" title={t("chat.edit")} aria-label={t("chat.edit")} disabled={props.busy} onClick={() => { setEditingId(message.id); setEditText(message.text); }}>{t("chat.edit")}</button>}
-                  {editingId === message.id && <button type="button" className="primary" disabled={props.busy || !editText.trim()} onClick={() => { const text = editText; setEditingId(null); void props.onBranch(message.id, false, text); }}>{t("chat.resend")}</button>}
-                </div>
-              )}
-              {branches.length > 0 && <div className="branch-list"><span>{t("chat.branches")}</span>{branches.map((item) => <button key={item.id} type="button" onClick={() => props.onOpen(item.id)}>{item.title}</button>)}</div>}
-            </article>
-          );
-        })}
+        {transcript}
         {props.busy && (
           <article className="bubble assistant">
             <div className="who">{t("chat.thinking")}</div>
+            {!live && status.map((line) => <div key={line} className="hint status-line">{line}</div>)}
             {reasoning && <details className="reasoning" open><summary>{t("chat.reasoning")}</summary><pre>{reasoning}</pre></details>}
-            {live && <MessageBody text={live} dark={props.boot.settings.theme === "dark"} />}
+            {live && <MessageBody text={live} dark={dark} streaming />}
             {tools.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
           </article>
         )}
@@ -715,12 +890,13 @@ function ChatStage(props: {
           <div className="approval">
             <div><strong>{t("chat.approval")}</strong><div className="meta">{approval.name}</div></div>
             <div className="row">
-              <button className="primary" onClick={() => void resolveApproval(approval.id, true)}>{t("chat.approve")}</button>
-              <button onClick={() => { setAllowed((current) => [...current, approval.name]); void resolveApproval(approval.id, true); }}>{t("chat.allowSession")}</button>
-              <button className="danger" onClick={() => void resolveApproval(approval.id, false)}>{t("chat.deny")}</button>
+              <button className="primary" onClick={() => answer(approval.id, true)}>{t("chat.approve")}</button>
+              <button onClick={() => { setAllowed((current) => [...current, approval.name]); answer(approval.id, true); }}>{t("chat.allowSession")}</button>
+              <button className="danger" onClick={() => answer(approval.id, false)}>{t("chat.deny")}</button>
             </div>
           </div>
         )}
+        {note}
         {queue.length > 0 && <div className="hint">{t("chat.queued")}: {queue.length}</div>}
         {props.plan && <p className="hint">{t("chat.planOn")}</p>}
         {composer}
@@ -787,11 +963,11 @@ function Composer(props: {
   onProvider: (id: string, model: string) => Promise<void>;
   onSend: () => void;
   onAttach: () => void;
-  onMic: () => void;
   onSlash: () => void;
 }) {
+  const canSend = !props.readOnly && props.draft.trim().length > 0;
   return (
-    <form onSubmit={(event) => { event.preventDefault(); props.onSend(); }}>
+    <form onSubmit={(event) => { event.preventDefault(); if (canSend) props.onSend(); }}>
       <div className="context-row">
         <span className="chip">{projectLeaf(props.cwd)} ▾</span>
         <label className="chip">
@@ -808,11 +984,17 @@ function Composer(props: {
           placeholder={props.t("chat.placeholder")}
           onChange={(event) => props.setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            // Enter while an IME (Chinese, Japanese) is composing only commits the candidate.
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
               event.preventDefault();
-              props.onSend();
+              if (canSend) props.onSend();
+              return;
             }
-            if (event.key === "/" && props.draft === "") props.onSlash();
+            if (event.key === "/" && props.draft === "") {
+              event.preventDefault();
+              props.onSlash();
+            }
           }}
         />
         <div className="composer-actions">
@@ -823,14 +1005,21 @@ function Composer(props: {
             model={props.model || props.provider?.model || ""}
             onPick={(providerId, model) => void props.onProvider(providerId, model)}
           />
-          {props.busy ? <button type="button" className="danger" onClick={() => void cancelPrompt()}>{props.t("chat.stop")}</button> : <button type="button" className="mic" onClick={props.onMic} aria-label="mic">●</button>}
+          <span className="send-hint">{props.t("chat.sendHint")}</span>
+          {props.busy && <button type="button" className="danger" onClick={() => void cancelPrompt().catch(() => undefined)}>{props.t("chat.stop")}</button>}
+          {(!props.busy || canSend) && (
+            <button type="submit" className="send" disabled={!canSend} title={props.t("chat.send")} aria-label={props.t("chat.send")} data-testid="send">
+              <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+              <span>{props.t("chat.send")}</span>
+            </button>
+          )}
         </div>
       </div>
     </form>
   );
 }
 
-function MessageBody(props: { text: string; dark: boolean }) {
+const MessageBody = memo(function MessageBody(props: { text: string; dark: boolean; streaming?: boolean }) {
   const parts = props.text.split(/```/);
   return (
     <div className="text">
@@ -839,13 +1028,13 @@ function MessageBody(props: { text: string; dark: boolean }) {
         const nl = part.indexOf("\n");
         const lang = (nl === -1 ? part : part.slice(0, nl)).trim();
         const body = nl === -1 ? "" : part.slice(nl + 1);
-        if (lang === "mermaid") return <Mermaid key={index} source={body} dark={props.dark} />;
+        if (lang === "mermaid" && !props.streaming && index < parts.length - 1) return <Mermaid key={index} source={body} dark={props.dark} />;
         if (lang === "diff") return <pre key={index} className="diff">{body}</pre>;
         return <pre key={index}>{body || part}</pre>;
       })}
     </div>
   );
-}
+});
 
 function Mermaid(props: { source: string; dark: boolean }) {
   const [svg, setSvg] = useState<string | null>(null);
@@ -1024,7 +1213,7 @@ function Customize(props: {
       ? props.settings.disabled_tools.filter((item) => item !== tool)
       : [...props.settings.disabled_tools, tool];
     const settings = { ...props.settings, disabled_tools: disabled };
-    void saveSettings(settings).then(() => props.onSettings(settings)).catch((reason: unknown) => props.setError(String(reason)));
+    void saveSettings(settings).then(() => props.onSettings(settings)).catch((reason: unknown) => props.setError(describe(reason)));
   }
   return (
     <div className="page">
@@ -1129,7 +1318,35 @@ function SettingsView(props: {
           props.onSaved(nextSettings, store);
         }}
       />
+      <Diagnostics t={t} setError={props.setError} />
     </div>
+  );
+}
+
+function Diagnostics(props: { t: (key: Key) => string; setError: (error: string | null) => void }) {
+  const { t } = props;
+  const [info, setInfo] = useState<DiagnosticsInfo | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => { diagnosticsInfo().then(setInfo).catch(() => setInfo(null)); }, []);
+  async function copy() {
+    try {
+      await copyText(await readLogs());
+      setNotice(t("diag.copied"));
+    } catch (reason) {
+      props.setError(describe(reason));
+    }
+  }
+  return (
+    <section className="panel diagnostics" data-testid="diagnostics">
+      <h2>{t("diag.title")}</h2>
+      <p className="hint">{t("diag.body")}</p>
+      {info && <p className="url">{t("diag.path")}: <code>{info.log_path}</code> · v{info.version} · {info.os} {info.arch}</p>}
+      <div className="row">
+        <button type="button" className="primary" onClick={() => void copy()}>{t("diag.copy")}</button>
+        <button type="button" className="ghost" onClick={() => void openLogFolder().catch((reason: unknown) => props.setError(describe(reason)))}>{t("diag.open")}</button>
+        {notice && <span className="hint">{notice}</span>}
+      </div>
+    </section>
   );
 }
 

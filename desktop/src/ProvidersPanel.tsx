@@ -61,6 +61,14 @@ function hostOf(url: string): string {
   }
 }
 
+/** Most OpenAI-compatible relays (DeepSeek, Kimi, one-api) reject max_completion_tokens; only OpenAI itself requires it. */
+function tokenField(format: ProviderFormat, baseUrl: string, previous?: Provider): Provider["token_field"] {
+  if (format !== "openai") return "max_tokens";
+  if (previous && previous.format === "openai") return previous.token_field;
+  const host = hostOf(baseUrl).toLowerCase();
+  return host.endsWith("openai.com") || host.endsWith("openai.azure.com") ? "max_completion_tokens" : "max_tokens";
+}
+
 function letter(name: string): string {
   return (name.trim().slice(0, 1) || "?").toUpperCase();
 }
@@ -214,13 +222,13 @@ export function ProvidersPanel(props: {
       env_key: envKey,
       env_key_fallbacks: previous?.env_key_fallbacks ?? [],
       context_window: previous?.context_window ?? (anthropic ? 200000 : 128000),
-      extra_headers: anthropic ? { "anthropic-version": "2023-06-01" } : {},
+      extra_headers: previous && previous.format === form.format ? previous.extra_headers : anthropic ? { "anthropic-version": "2023-06-01" } : {},
       env_http_headers: anthropic ? { "x-api-key": envKey } : {},
       auth: anthropic ? "x_api_key" : "bearer",
       enabled: form.enabled,
       temperature: previous?.temperature ?? null,
       max_tokens: previous?.max_tokens ?? 8192,
-      token_field: form.format === "openai" ? "max_completion_tokens" : "max_tokens",
+      token_field: tokenField(form.format, form.base_url, previous),
       builtin: false,
       model_hints: models,
       models,

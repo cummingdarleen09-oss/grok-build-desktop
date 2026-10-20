@@ -142,6 +142,15 @@ export interface Bootstrap {
   grok_home: string;
   user_name: string;
   automations: Automation[];
+  log_path?: string;
+}
+
+export interface DiagnosticsInfo {
+  log_path: string;
+  log_dir: string;
+  version: string;
+  os: string;
+  arch: string;
 }
 
 export type AgentEvent =
@@ -151,6 +160,7 @@ export type AgentEvent =
   | { type: "tool_started"; id: string; name: string; arguments: string }
   | { type: "tool_finished"; id: string; output: string; is_error: boolean }
   | { type: "error"; message: string }
+  | { type: "status"; text: string }
   | { type: "done" };
 
 export interface AgentEnvelope {
@@ -389,6 +399,69 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
 export async function loadBootstrap(): Promise<Bootstrap> {
   if (!inTauri()) return structuredClone(memory);
   return invoke<Bootstrap>("bootstrap");
+}
+
+export async function listChats(): Promise<SessionSummary[]> {
+  if (!inTauri()) return structuredClone(memory.sessions);
+  return invoke<SessionSummary[]>("list_chats");
+}
+
+/** Rejects with a message the user can act on when the provider has no usable credential. */
+export async function checkReady(providerId: string): Promise<void> {
+  if (!inTauri()) {
+    const provider = memory.providers.providers.find((item) => item.id === providerId);
+    if (!provider || !provider.enabled) throw new Error("No model provider is ready. Open Settings → Model providers.");
+    const status = memory.secrets.find((item) => item.id === providerId);
+    if (!status || !(status.location || status.from_env || status.from_session)) {
+      throw new Error(`${provider.name} has no credential yet. Sign in to Grok or save an API key in Settings → Model providers.`);
+    }
+    return;
+  }
+  await invoke("check_ready", { providerId });
+}
+
+export async function onProvidersUpdated(handler: (update: { providers: ProviderStore; secrets: SecretStatus[] }) => void): Promise<() => void> {
+  if (!inTauri()) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ providers: ProviderStore; secrets: SecretStatus[] }>("providers-updated", (event) => handler(event.payload));
+}
+
+export async function diagnosticsInfo(): Promise<DiagnosticsInfo> {
+  if (!inTauri()) return { log_path: "~/.grok/desktop.log", log_dir: "~/.grok", version: "browser", os: navigator.platform, arch: "" };
+  return invoke<DiagnosticsInfo>("diagnostics_info");
+}
+
+export async function readLogs(): Promise<string> {
+  if (!inTauri()) return "Browser preview: logs are written by the desktop app.";
+  return invoke<string>("read_logs");
+}
+
+export async function openLogFolder(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke("open_log_folder");
+}
+
+/** Best effort: diagnostics must never throw into the UI. */
+export function logFrontend(level: "info" | "warn" | "error", message: string): void {
+  if (!inTauri()) return;
+  invoke("log_frontend", { level, message: message.slice(0, 4000) }).catch(() => undefined);
+}
+
+export async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    if (!ok) throw new Error("clipboard unavailable");
+  }
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
