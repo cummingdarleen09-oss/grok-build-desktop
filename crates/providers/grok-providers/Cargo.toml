@@ -36,6 +36,14 @@ tracing = { workspace = true }
 xai-grok-models = { workspace = true }
 keyring = { version = "3", optional = true }
 
+# keyring 3 has no default store. Without these features every platform gets
+# the in-memory mock, which silently drops saved keys.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", optional = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", optional = true, features = ["windows-native"] }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
