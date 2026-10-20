@@ -28,9 +28,9 @@ pub use config_merge::{
     save_provider_store_to, sync_cli_config, upsert_cli_config,
 };
 pub use models::{
-    DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT, DEFAULT_CONTEXT_WINDOW, ModelInfo, ModelOptions,
-    ReasoningEffort, ReasoningEffortOption, ThinkingStyle, context_window_choices, effort_label,
-    known_model, known_models, parse_model_entries, parse_model_value,
+    CompactionAtTokens, DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT, DEFAULT_CONTEXT_WINDOW, ModelInfo,
+    ModelOptions, ReasoningEffort, ReasoningEffortOption, ThinkingStyle, context_window_choices,
+    effort_label, known_model, known_models, parse_model_entries, parse_model_value,
 };
 pub use presets::{Preset, builtin_presets, default_store, normalize_store, template_presets};
 pub use secrets::{SecretLocation, SecretStore};
@@ -38,7 +38,11 @@ pub use stream::{
     AnthropicAcc, AssistantBuild, OpenAiAcc, ResponsesAcc, SseDecoder, SseEvent,
     decode_anthropic_event, decode_openai_data, decode_responses_data,
 };
-pub use translate::{anthropic_request_body, endpoint_url, openai_request_body};
+pub use translate::{
+    anthropic_request_body, anthropic_request_body_with, endpoint_url, openai_request_body,
+    openai_request_body_with, request_body, responses_request_body, responses_request_body_with,
+    thinking_budget,
+};
 pub use types::*;
 pub use xai_auth::{
     LoginProfile, SessionIdentity, XaiSecretSource, has_login_session, pick_xai_secret,

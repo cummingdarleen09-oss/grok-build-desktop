@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use xai_grok_sampling_types::{
-    ReasoningEffort, ReasoningEffortOption, effort_label, parse_reasoning_effort_options,
+    CompactionAtTokens, ReasoningEffort, ReasoningEffortOption, effort_label,
+    parse_reasoning_effort_options,
 };
 
 use crate::types::{ProviderConfig, ProviderFormat};
@@ -70,6 +71,10 @@ pub struct ModelInfo {
     pub supported_in_api: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingStyle>,
+    /// The CLI's `x-compaction-at` header: `true` sends the token count where
+    /// auto-compaction will start for the chosen window, a number sends itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_at_tokens: Option<CompactionAtTokens>,
 }
 
 /// What the composer offers for one model, and what a request falls back to.
@@ -81,6 +86,7 @@ pub struct ModelOptions {
     pub default_context_window: u64,
     pub auto_compact_threshold_percent: u8,
     pub thinking: ThinkingStyle,
+    pub compaction_at_tokens: Option<CompactionAtTokens>,
 }
 
 impl ModelInfo {
@@ -127,6 +133,9 @@ impl ModelInfo {
         }
         if self.thinking.is_none() {
             self.thinking = known.thinking;
+        }
+        if self.compaction_at_tokens.is_none() {
+            self.compaction_at_tokens = known.compaction_at_tokens;
         }
     }
 
@@ -182,6 +191,7 @@ impl ModelInfo {
                 .filter(|percent| (1..=100).contains(percent))
                 .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT),
             thinking: self.thinking.unwrap_or_default(),
+            compaction_at_tokens: self.compaction_at_tokens,
         }
     }
 }
@@ -325,6 +335,11 @@ pub fn parse_model_value(value: &Value) -> Option<ModelInfo> {
         hidden: flag("hidden", "hidden").unwrap_or(false),
         supported_in_api: flag("supportedInApi", "supported_in_api"),
         thinking: None,
+        compaction_at_tokens: obj
+            .get("compactionAtTokens")
+            .or_else(|| obj.get("compaction_at_tokens"))
+            .or_else(|| meta.and_then(|m| m.get("compactionAtTokens")))
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
         id,
     })
 }
@@ -559,6 +574,12 @@ mod tests {
         assert_eq!(options.default_context_window, 500_000);
         assert_eq!(options.auto_compact_threshold_percent, 80);
         assert_eq!(options.efforts[0].label, "Extra High Effort");
+        assert_eq!(
+            options
+                .compaction_at_tokens
+                .and_then(|at| at.resolve(500_000, 80)),
+            Some(400_000)
+        );
     }
 
     #[test]

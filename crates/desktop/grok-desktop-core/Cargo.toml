@@ -21,6 +21,8 @@ toml = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
+xai-grok-compaction = { path = "../../common/xai-grok-compaction" }
+xai-token-estimation = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

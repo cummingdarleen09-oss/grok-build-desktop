@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use grok_providers::{Role, Turn};
+use grok_providers::{ReasoningEffort, Role, Turn};
 
 /// Filesystem component limit shared with upstream `encode_cwd_dirname`.
 const MAX_DIRNAME_BYTES: usize = 255;
@@ -21,12 +21,16 @@ pub struct StoredTool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatMessage {
     pub id: String,
-    /// `user` or `assistant`.
+    /// `user`, `assistant`, or `compaction`. A compaction message holds the
+    /// summary that replaces everything before it in later requests.
     pub role: String,
     #[serde(default)]
     pub text: String,
     #[serde(default)]
     pub reasoning: String,
+    /// Anthropic's signature over `reasoning`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning_signature: String,
     #[serde(default)]
     pub tool_calls: Vec<StoredTool>,
 }
@@ -51,6 +55,12 @@ pub struct Session {
     /// 1-based index of the chosen message in the parent transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branched_at_index: Option<u32>,
+    /// This chat's effort. `None` uses the saved default for the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// This chat's context window in tokens. `None` uses the saved default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +106,8 @@ pub fn create_session(cwd: &str, provider_id: &str, model: &str, title: &str) ->
         parent_session_id: None,
         branched_from_message_id: None,
         branched_at_index: None,
+        reasoning_effort: None,
+        context_window: None,
     }
 }
 
@@ -191,6 +203,8 @@ pub fn branch_from_session(
         parent_session_id: Some(parent.id.clone()),
         branched_from_message_id: Some(message_id.to_string()),
         branched_at_index: Some((index as u32) + 1),
+        reasoning_effort: parent.reasoning_effort,
+        context_window: parent.context_window,
     })
 }
 
@@ -216,11 +230,18 @@ pub fn close_open_tool_round(messages: &mut Vec<ChatMessage>) {
     }
 }
 
-/// Provider turns for `messages`, with dangling tool calls omitted.
+pub const COMPACTION_ROLE: &str = "compaction";
+
+/// Provider turns for `messages`, with dangling tool calls omitted. The last
+/// compaction message stands in, as a user turn, for everything before it.
 pub fn conversation_turns(messages: &[ChatMessage]) -> Vec<Turn> {
+    let start = messages
+        .iter()
+        .rposition(|message| message.role == COMPACTION_ROLE)
+        .unwrap_or(0);
     let mut turns = Vec::new();
-    for message in messages {
-        if message.role == "user" {
+    for message in &messages[start..] {
+        if message.role == "user" || message.role == COMPACTION_ROLE {
             turns.push(Turn::user(&message.text));
             continue;
         }
@@ -249,6 +270,8 @@ pub fn conversation_turns(messages: &[ChatMessage]) -> Vec<Turn> {
             } else {
                 Some(message.reasoning.clone())
             },
+            reasoning_signature: Some(message.reasoning_signature.clone())
+                .filter(|signature| !signature.is_empty()),
             tool_calls: calls.clone(),
             tool_call_id: None,
         });
@@ -614,6 +637,8 @@ pub fn load_classic_session_in(home: &Path, id: &str) -> Result<Session, String>
             .map(str::to_string),
         branched_from_message_id: None,
         branched_at_index: None,
+        reasoning_effort: None,
+        context_window: None,
     })
 }
 
@@ -656,6 +681,7 @@ fn read_classic_messages(path: &Path) -> Vec<ChatMessage> {
             text: text.trim().to_string(),
             reasoning: String::new(),
             tool_calls: Vec::new(),
+            reasoning_signature: String::new(),
         });
     }
     messages
@@ -786,6 +812,7 @@ mod tests {
             text: text.into(),
             reasoning: String::new(),
             tool_calls: tools,
+            reasoning_signature: String::new(),
         }
     }
 
@@ -863,6 +890,8 @@ mod tests {
                 parent_session_id: None,
                 branched_from_message_id: None,
                 branched_at_index: None,
+                reasoning_effort: None,
+                context_window: None,
             })
             .unwrap(),
         )

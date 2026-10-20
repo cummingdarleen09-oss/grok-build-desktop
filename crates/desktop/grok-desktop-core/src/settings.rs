@@ -1,8 +1,19 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use grok_providers::grok_home;
+use grok_providers::{ReasoningEffort, grok_home};
+
+/// The effort and context window a new chat with one model starts with.
+/// Written whenever the user changes them in the composer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelDefault {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesktopSettings {
@@ -23,6 +34,9 @@ pub struct DesktopSettings {
     /// `light` or `dark`. The window starts in the light theme.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Keyed by `provider/model`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_defaults: BTreeMap<String, ModelDefault>,
 }
 
 fn default_lang() -> String {
@@ -51,13 +65,25 @@ impl Default for DesktopSettings {
             disabled_tools: Vec::new(),
             known_projects: Vec::new(),
             theme: default_theme(),
+            model_defaults: BTreeMap::new(),
         }
     }
+}
+
+pub fn model_default_key(provider_id: &str, model: &str) -> String {
+    format!("{provider_id}/{model}")
 }
 
 impl DesktopSettings {
     pub fn asks_permission(&self) -> bool {
         self.permission != "auto"
+    }
+
+    pub fn model_default(&self, provider_id: &str, model: &str) -> ModelDefault {
+        self.model_defaults
+            .get(&model_default_key(provider_id, model))
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -117,6 +143,29 @@ pub fn save_settings(settings: &DesktopSettings) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_defaults_survive_toml_with_dots_and_slashes_in_the_key() {
+        let mut settings = DesktopSettings::default();
+        settings.model_defaults.insert(
+            model_default_key("xai", "grok-4.7"),
+            ModelDefault {
+                reasoning_effort: Some(ReasoningEffort::Xhigh),
+                context_window: Some(256_000),
+            },
+        );
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let back: DesktopSettings = toml::from_str(&text).unwrap();
+        assert_eq!(back, settings);
+        assert_eq!(
+            back.model_default("xai", "grok-4.7").reasoning_effort,
+            Some(ReasoningEffort::Xhigh)
+        );
+        assert_eq!(
+            back.model_default("xai", "grok-4.6"),
+            ModelDefault::default()
+        );
+    }
 
     #[test]
     fn launch_folders_of_a_gui_app_are_not_used_as_the_project() {

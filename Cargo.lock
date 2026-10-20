@@ -5403,6 +5403,8 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "xai-grok-compaction",
+ "xai-token-estimation",
 ]
 
 [[package]]

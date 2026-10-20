@@ -124,13 +124,6 @@ pub fn offline_entries() -> Vec<ModelInfo> {
         .collect()
 }
 
-pub fn offline_candidates() -> Vec<String> {
-    offline_entries()
-        .into_iter()
-        .map(|entry| entry.id)
-        .collect()
-}
-
 pub fn offline_choice() -> ModelChoice {
     ModelChoice::from_entries(offline_entries(), true)
 }
@@ -387,15 +380,6 @@ pub async fn fetch_model_entries(auth: ModelListAuth<'_>) -> Result<Vec<ModelInf
     }
     let body: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
     Ok(parse_model_entries(&body))
-}
-
-pub async fn fetch_model_ids(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
-    let entries = fetch_model_entries(ModelListAuth::ApiKey {
-        base_url,
-        key: api_key,
-    })
-    .await?;
-    Ok(entries.into_iter().map(|entry| entry.id).collect())
 }
 
 pub fn parse_models_payload(body: &serde_json::Value) -> Vec<String> {

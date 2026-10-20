@@ -115,6 +115,27 @@ pub fn tr(lang: &str, key: &str) -> String {
                 "Branch"
             }
         }
+        "compacting" => {
+            if zh {
+                "上下文约 {used} / {window} tokens，已到 {percent}% 阈值，正在压缩较早的对话…"
+            } else {
+                "Context is about {used} of {window} tokens, past the {percent}% threshold. Compacting earlier messages…"
+            }
+        }
+        "compacted" => {
+            if zh {
+                "已压缩较早的对话，继续回复。"
+            } else {
+                "Earlier messages were compacted. Continuing."
+            }
+        }
+        "compact_failed" => {
+            if zh {
+                "压缩上下文失败（{error}），按原样继续发送。"
+            } else {
+                "Compaction failed ({error}); sending the full context."
+            }
+        }
         _ => key,
     };
     text.to_string()
