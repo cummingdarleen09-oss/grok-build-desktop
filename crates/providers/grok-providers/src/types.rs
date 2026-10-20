@@ -295,6 +295,24 @@ pub enum ProviderError {
     Json(#[from] serde_json::Error),
 }
 
+impl ProviderError {
+    /// The message plus its source chain. reqwest's own message stops at
+    /// "error sending request", which hides "connection refused" or a DNS failure.
+    pub fn detailed(&self) -> String {
+        let mut text = self.to_string();
+        let mut source = std::error::Error::source(self);
+        while let Some(cause) = source {
+            let cause_text = cause.to_string();
+            if !cause_text.is_empty() && !text.contains(&cause_text) {
+                text.push_str(": ");
+                text.push_str(&cause_text);
+            }
+            source = cause.source();
+        }
+        text
+    }
+}
+
 pub fn redact_secret(body: &str, secret: &str) -> String {
     if secret.len() < 4 {
         return body.to_string();

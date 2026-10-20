@@ -206,3 +206,59 @@ async fn http_error_is_redacted() {
     assert!(!rendered.contains("sk-secret-value"), "{rendered}");
     assert!(rendered.contains("•••"), "{rendered}");
 }
+
+#[tokio::test]
+async fn a_json_body_instead_of_an_event_stream_is_reported() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(r#"{"error":{"message":"model not found: deepseek-chat"}}"#),
+        )
+        .mount(&server)
+        .await;
+    let mut provider = preset("deepseek");
+    provider.base_url = server.uri();
+    let client = ProviderClient::new().unwrap();
+    let turns = vec![Turn::user("ping")];
+    let mut stream = client
+        .stream(CompletionRequest {
+            provider: &provider,
+            api_key: "sk-deepseek",
+            turns: &turns,
+            tools: &[],
+        })
+        .await
+        .unwrap();
+    let mut error = None;
+    while let Some(event) = stream.next().await {
+        if let Err(failure) = event {
+            error = Some(failure.to_string());
+        }
+    }
+    let error = error.expect("a non-SSE body must surface as an error");
+    assert!(error.contains("model not found"), "{error}");
+}
+
+#[tokio::test]
+async fn an_unreachable_host_fails_with_a_readable_cause() {
+    let mut provider = preset("deepseek");
+    provider.base_url = "http://127.0.0.1:9".into();
+    let client = ProviderClient::new().unwrap();
+    let turns = vec![Turn::user("ping")];
+    let error = match client
+        .stream(CompletionRequest {
+            provider: &provider,
+            api_key: "sk-deepseek",
+            turns: &turns,
+            tools: &[],
+        })
+        .await
+    {
+        Ok(_) => panic!("port 9 should refuse the connection"),
+        Err(error) => error.detailed(),
+    };
+    assert!(error.to_ascii_lowercase().contains("connect"), "{error}");
+}

@@ -409,12 +409,22 @@ pub fn sync_cli_config(providers: &[ProviderConfig]) -> Result<PathBuf, String> 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    // A file the parser rejects is left alone. Replacing it would erase the
+    // user's CLI settings and MCP servers.
     let mut document = existing
         .parse::<toml_edit::DocumentMut>()
-        .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+        .map_err(|error| format!("{} could not be parsed: {error}", path.display()))?;
+    let before = document.to_string();
     upsert_cli_config(&mut document, providers);
-    std::fs::write(&path, document.to_string()).map_err(|error| error.to_string())?;
+    let after = document.to_string();
+    if after != before || existing.is_empty() {
+        std::fs::write(&path, after).map_err(|error| error.to_string())?;
+    }
     Ok(path)
 }
 
