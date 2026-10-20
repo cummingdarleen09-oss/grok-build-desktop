@@ -55,6 +55,7 @@ async fn openai_compatible_mock_checks_translation_and_stream() {
             api_key: "sk-deepseek",
             turns: &turns,
             tools: &[],
+            effort: None,
         })
         .await
         .unwrap();
@@ -132,7 +133,8 @@ async fn responses_mock_streams_text_and_function_calls() {
         .and(body_partial_json(json!({
             "model": "grok-4.7",
             "stream": true,
-            "max_output_tokens": 32
+            "max_output_tokens": 32,
+            "reasoning": {"effort": "xhigh"}
         })))
         .respond_with(
             ResponseTemplate::new(200)
@@ -154,6 +156,7 @@ async fn responses_mock_streams_text_and_function_calls() {
             api_key: "sk-xai",
             turns: &turns,
             tools: &[],
+            effort: Some(grok_providers::ReasoningEffort::Xhigh),
         })
         .await
         .unwrap();
@@ -195,6 +198,7 @@ async fn http_error_is_redacted() {
             api_key: "sk-secret-value",
             turns: &turns,
             tools: &[],
+            effort: None,
         })
         .await
     {
@@ -229,6 +233,7 @@ async fn a_json_body_instead_of_an_event_stream_is_reported() {
             api_key: "sk-deepseek",
             turns: &turns,
             tools: &[],
+            effort: None,
         })
         .await
         .unwrap();
@@ -254,6 +259,7 @@ async fn an_unreachable_host_fails_with_a_readable_cause() {
             api_key: "sk-deepseek",
             turns: &turns,
             tools: &[],
+            effort: None,
         })
         .await
     {

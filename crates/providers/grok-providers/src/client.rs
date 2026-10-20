@@ -17,6 +17,8 @@ pub struct CompletionRequest<'a> {
     pub api_key: &'a str,
     pub turns: &'a [Turn],
     pub tools: &'a [ToolDef],
+    /// Already checked against the model's menu; sent as each API expects.
+    pub effort: Option<crate::models::ReasoningEffort>,
 }
 
 pub struct ProviderClient {
@@ -49,7 +51,12 @@ impl ProviderClient {
             &request.provider.base_url,
             request.provider.format.path_suffix(),
         )?;
-        let body = request_body(request.provider, request.turns, request.tools)?;
+        let body = request_body(
+            request.provider,
+            request.turns,
+            request.tools,
+            request.effort,
+        )?;
         let mut builder = self
             .http
             .post(url)
@@ -97,6 +104,7 @@ impl ProviderClient {
                 api_key,
                 turns,
                 tools: &[],
+                effort: None,
             })
             .await?;
         let mut text = String::new();

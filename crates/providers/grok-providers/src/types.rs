@@ -196,6 +196,9 @@ pub struct Turn {
     /// DeepSeek reasoner requires this to be echoed back on later requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Anthropic's signature over `reasoning`, sent back with it while thinking is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_signature: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -208,6 +211,7 @@ impl Turn {
             role: Role::System,
             text: text.into(),
             reasoning: None,
+            reasoning_signature: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -218,6 +222,7 @@ impl Turn {
             role: Role::User,
             text: text.into(),
             reasoning: None,
+            reasoning_signature: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -228,6 +233,7 @@ impl Turn {
             role: Role::Tool,
             text: text.into(),
             reasoning: None,
+            reasoning_signature: None,
             tool_calls: Vec::new(),
             tool_call_id: Some(id.into()),
         }
@@ -266,6 +272,10 @@ pub enum ProviderEvent {
     },
     Reasoning {
         text: String,
+    },
+    /// Anthropic `signature_delta` for the thinking block just streamed.
+    ReasoningSignature {
+        signature: String,
     },
     ToolStart {
         index: u32,

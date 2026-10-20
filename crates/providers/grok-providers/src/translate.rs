@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use crate::models::{ReasoningEffort, ThinkingStyle};
 use crate::types::{
     ProviderConfig, ProviderError, ProviderFormat, Role, TokenField, ToolDef, Turn,
 };
@@ -26,10 +27,35 @@ pub fn endpoint_url(base_url: &str, suffix: &str) -> Result<String, ProviderErro
     })
 }
 
+/// Anthropic `thinking.budget_tokens` per effort, for models that take a
+/// budget instead of adaptive thinking. 1024 is the API's minimum.
+pub fn thinking_budget(effort: ReasoningEffort) -> Option<u32> {
+    match effort {
+        ReasoningEffort::None => None,
+        ReasoningEffort::Minimal => Some(1_024),
+        ReasoningEffort::Low => Some(4_096),
+        ReasoningEffort::Medium => Some(10_000),
+        ReasoningEffort::High => Some(16_000),
+        ReasoningEffort::Xhigh => Some(32_000),
+        ReasoningEffort::Max => Some(64_000),
+    }
+}
+
 pub fn openai_request_body(
     provider: &ProviderConfig,
     turns: &[Turn],
     tools: &[ToolDef],
+) -> Result<Value, ProviderError> {
+    openai_request_body_with(provider, turns, tools, None)
+}
+
+/// Chat Completions takes the effort as `reasoning_effort`
+/// (`xai-grok-sampling-types` `conversation::chat_completions`).
+pub fn openai_request_body_with(
+    provider: &ProviderConfig,
+    turns: &[Turn],
+    tools: &[ToolDef],
+    effort: Option<ReasoningEffort>,
 ) -> Result<Value, ProviderError> {
     let mut body = json!({
         "model": provider.model,
@@ -37,6 +63,9 @@ pub fn openai_request_body(
         "stream": true,
         "stream_options": { "include_usage": true },
     });
+    if let Some(effort) = effort {
+        body["reasoning_effort"] = json!(effort.as_ref());
+    }
     match provider.token_field {
         TokenField::MaxTokens => {
             body["max_tokens"] = json!(provider.max_tokens);
@@ -59,18 +88,58 @@ pub fn anthropic_request_body(
     turns: &[Turn],
     tools: &[ToolDef],
 ) -> Result<Value, ProviderError> {
-    let (system, messages) = anthropic_messages(turns)?;
+    anthropic_request_body_with(provider, turns, tools, None)
+}
+
+/// Adaptive thinking (the default) is what the CLI sends
+/// (`conversation::messages`): `thinking: {type: "adaptive", display:
+/// "summarized"}` plus `output_config.effort`, and nothing for `none` or
+/// `minimal`. A model set to budget thinking gets `thinking.budget_tokens`
+/// instead, with `max_tokens` raised above the budget as the API requires.
+/// Temperature is dropped while thinking, which the API rejects otherwise.
+pub fn anthropic_request_body_with(
+    provider: &ProviderConfig,
+    turns: &[Turn],
+    tools: &[ToolDef],
+    effort: Option<ReasoningEffort>,
+) -> Result<Value, ProviderError> {
+    let style = provider.model_options(&provider.model).thinking;
+    let mut max_tokens = provider.max_tokens;
+    let thinking = match (effort, style) {
+        (Some(effort), ThinkingStyle::Adaptive) => effort.to_messages_api().map(|level| {
+            (
+                json!({"type": "adaptive", "display": "summarized"}),
+                Some(level),
+            )
+        }),
+        (Some(effort), ThinkingStyle::Budget) => thinking_budget(effort).map(|budget| {
+            max_tokens = max_tokens.max(budget.saturating_add(4_096));
+            (json!({"type": "enabled", "budget_tokens": budget}), None)
+        }),
+        (None, _) => None,
+    };
+    let (system, messages) = anthropic_messages(turns, thinking.is_some())?;
     let mut body = json!({
         "model": provider.model,
-        "max_tokens": provider.max_tokens,
+        "max_tokens": max_tokens,
         "messages": messages,
         "stream": true,
     });
     if !system.is_empty() {
         body["system"] = json!(system);
     }
-    if let Some(temperature) = provider.temperature {
-        body["temperature"] = json!(temperature);
+    match &thinking {
+        Some((config, level)) => {
+            body["thinking"] = config.clone();
+            if let Some(level) = level {
+                body["output_config"] = json!({ "effort": level });
+            }
+        }
+        None => {
+            if let Some(temperature) = provider.temperature {
+                body["temperature"] = json!(temperature);
+            }
+        }
     }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.iter().map(anthropic_tool).collect());
@@ -83,13 +152,26 @@ pub fn responses_request_body(
     turns: &[Turn],
     tools: &[ToolDef],
 ) -> Result<Value, ProviderError> {
+    responses_request_body_with(provider, turns, tools, None)
+}
+
+/// The Responses API takes the effort as `reasoning.effort`
+/// (`ReasoningEffort::to_responses_api`). No effort, no `reasoning` object.
+pub fn responses_request_body_with(
+    provider: &ProviderConfig,
+    turns: &[Turn],
+    tools: &[ToolDef],
+    effort: Option<ReasoningEffort>,
+) -> Result<Value, ProviderError> {
     let mut body = json!({
         "model": provider.model,
         "input": responses_input(turns)?,
         "stream": true,
         "max_output_tokens": provider.max_tokens,
-        "reasoning": { "effort": "high" },
     });
+    if let Some(effort) = effort {
+        body["reasoning"] = json!({ "effort": effort.as_ref() });
+    }
     if let Some(temperature) = provider.temperature {
         body["temperature"] = json!(temperature);
     }
@@ -103,11 +185,12 @@ pub fn request_body(
     provider: &ProviderConfig,
     turns: &[Turn],
     tools: &[ToolDef],
+    effort: Option<ReasoningEffort>,
 ) -> Result<Value, ProviderError> {
     match provider.format {
-        ProviderFormat::OpenAi => openai_request_body(provider, turns, tools),
-        ProviderFormat::Anthropic => anthropic_request_body(provider, turns, tools),
-        ProviderFormat::Responses => responses_request_body(provider, turns, tools),
+        ProviderFormat::OpenAi => openai_request_body_with(provider, turns, tools, effort),
+        ProviderFormat::Anthropic => anthropic_request_body_with(provider, turns, tools, effort),
+        ProviderFormat::Responses => responses_request_body_with(provider, turns, tools, effort),
     }
 }
 
@@ -206,7 +289,12 @@ fn openai_messages(turns: &[Turn]) -> Result<Vec<Value>, ProviderError> {
     Ok(messages)
 }
 
-fn anthropic_messages(turns: &[Turn]) -> Result<(String, Vec<Value>), ProviderError> {
+/// With thinking on, an assistant turn that carries a signed thinking block
+/// sends it back first; the API requires that before a tool result.
+fn anthropic_messages(
+    turns: &[Turn],
+    thinking: bool,
+) -> Result<(String, Vec<Value>), ProviderError> {
     let mut system = String::new();
     let mut messages: Vec<Value> = Vec::new();
     let mut index = 0;
@@ -229,6 +317,20 @@ fn anthropic_messages(turns: &[Turn]) -> Result<(String, Vec<Value>), ProviderEr
             }
             Role::Assistant => {
                 let mut blocks = Vec::new();
+                if thinking
+                    && let (Some(text), Some(signature)) = (
+                        turn.reasoning.as_deref().filter(|text| !text.is_empty()),
+                        turn.reasoning_signature
+                            .as_deref()
+                            .filter(|signature| !signature.is_empty()),
+                    )
+                {
+                    blocks.push(json!({
+                        "type": "thinking",
+                        "thinking": text,
+                        "signature": signature,
+                    }));
+                }
                 if !turn.text.is_empty() {
                     blocks.push(json!({"type": "text", "text": turn.text}));
                 }
@@ -340,6 +442,7 @@ mod tests {
                 role: Role::Assistant,
                 text: String::new(),
                 reasoning: Some("look at the file".into()),
+                reasoning_signature: None,
                 tool_calls: vec![ToolCall {
                     id: "call_1".into(),
                     name: "read_file".into(),
@@ -445,7 +548,7 @@ mod tests {
         .unwrap();
         assert_eq!(body["model"], "demo-model");
         assert_eq!(body["max_output_tokens"], 128);
-        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(body.get("reasoning").is_none());
         assert_eq!(body["stream"], true);
         let input = body["input"].as_array().unwrap();
         assert_eq!(input[0]["role"], "system");
@@ -462,6 +565,104 @@ mod tests {
             endpoint_url("https://api.x.ai/v1", "responses").unwrap(),
             "https://api.x.ai/v1/responses"
         );
+    }
+
+    #[test]
+    fn effort_goes_where_each_api_reads_it() {
+        let turns = [Turn::user("hi")];
+        let responses = request_body(
+            &provider(ProviderFormat::Responses),
+            &turns,
+            &[],
+            Some(ReasoningEffort::Xhigh),
+        )
+        .unwrap();
+        assert_eq!(responses["reasoning"], json!({"effort": "xhigh"}));
+        assert!(responses.get("reasoning_effort").is_none());
+
+        let chat = request_body(
+            &provider(ProviderFormat::OpenAi),
+            &turns,
+            &[],
+            Some(ReasoningEffort::Low),
+        )
+        .unwrap();
+        assert_eq!(chat["reasoning_effort"], "low");
+        assert!(chat.get("reasoning").is_none());
+
+        let mut claude = provider(ProviderFormat::Anthropic);
+        claude.temperature = Some(0.3);
+        let adaptive = request_body(&claude, &turns, &[], Some(ReasoningEffort::High)).unwrap();
+        assert_eq!(
+            adaptive["thinking"],
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(adaptive["output_config"], json!({"effort": "high"}));
+        assert!(adaptive.get("temperature").is_none());
+        assert_eq!(adaptive["max_tokens"], 128);
+
+        for (format, effort) in [
+            (ProviderFormat::Anthropic, None),
+            (ProviderFormat::Anthropic, Some(ReasoningEffort::None)),
+            (ProviderFormat::Anthropic, Some(ReasoningEffort::Minimal)),
+            (ProviderFormat::Responses, None),
+            (ProviderFormat::OpenAi, None),
+        ] {
+            let mut config = provider(format);
+            config.temperature = Some(0.3);
+            let body = request_body(&config, &turns, &[], effort).unwrap();
+            assert!(body.get("thinking").is_none(), "{format:?} {effort:?}");
+            assert!(body.get("output_config").is_none(), "{format:?} {effort:?}");
+            assert!(body.get("reasoning").is_none(), "{format:?} {effort:?}");
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "{format:?} {effort:?}"
+            );
+            assert!(body.get("temperature").is_some(), "{format:?} {effort:?}");
+        }
+    }
+
+    #[test]
+    fn budget_thinking_sends_budget_tokens_and_raises_max_tokens() {
+        let mut claude = provider(ProviderFormat::Anthropic);
+        claude.model = "claude-sonnet-4-5".into();
+        claude.model_info = vec![crate::models::known_model("claude-sonnet-4-5").unwrap()];
+        let body = request_body(
+            &claude,
+            &[Turn::user("hi")],
+            &[],
+            Some(ReasoningEffort::Medium),
+        )
+        .unwrap();
+        assert_eq!(
+            body["thinking"],
+            json!({"type": "enabled", "budget_tokens": 10_000})
+        );
+        assert!(body.get("output_config").is_none());
+        assert_eq!(body["max_tokens"], 10_000 + 4_096);
+        let minimal = request_body(
+            &claude,
+            &[Turn::user("hi")],
+            &[],
+            Some(ReasoningEffort::Minimal),
+        )
+        .unwrap();
+        assert_eq!(minimal["thinking"]["budget_tokens"], 1_024);
+    }
+
+    #[test]
+    fn signed_thinking_is_replayed_only_while_thinking_is_on() {
+        let mut turns = sample_turns();
+        turns[2].reasoning_signature = Some("sig-1".into());
+        let claude = provider(ProviderFormat::Anthropic);
+        let on = request_body(&claude, &turns, &[], Some(ReasoningEffort::High)).unwrap();
+        assert_eq!(
+            on["messages"][1]["content"][0],
+            json!({"type": "thinking", "thinking": "look at the file", "signature": "sig-1"})
+        );
+        assert_eq!(on["messages"][1]["content"][1]["type"], "tool_use");
+        let off = request_body(&claude, &turns, &[], None).unwrap();
+        assert_eq!(off["messages"][1]["content"][0]["type"], "tool_use");
     }
 
     #[test]
