@@ -224,6 +224,44 @@ struct StoredProfile {
     last_name: Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+}
+
+/// Who the current Grok session belongs to. The CLI sends these as
+/// `x-userid` and `x-email` when it lists models through the chat proxy.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub user_id: Option<String>,
+    pub email: Option<String>,
+}
+
+pub fn session_identity() -> SessionIdentity {
+    let entries: Vec<(String, StoredProfile)> = match std::env::var(GROK_AUTH_ENV) {
+        Ok(inline) => serde_json::from_str::<StoredProfile>(&inline)
+            .map(|auth| vec![("inline".to_string(), auth)])
+            .unwrap_or_default(),
+        Err(_) => std::fs::read_to_string(auth_json_path())
+            .ok()
+            .and_then(|text| serde_json::from_str::<BTreeMap<String, StoredProfile>>(&text).ok())
+            .map(|map| map.into_iter().collect())
+            .unwrap_or_default(),
+    };
+    entries
+        .into_iter()
+        .filter(|(scope, auth)| {
+            scope != API_KEY_SCOPE
+                && auth.auth_mode != "api_key"
+                && !is_legacy_mode(&auth.auth_mode)
+                && !auth.key.trim().is_empty()
+                && !is_expired_at(auth.expires_at.as_deref(), auth.create_time.as_deref())
+        })
+        .max_by(|left, right| left.1.create_time.cmp(&right.1.create_time))
+        .map(|(_, auth)| SessionIdentity {
+            user_id: nonempty(auth.user_id.as_deref()),
+            email: nonempty(auth.email.as_deref()),
+        })
+        .unwrap_or_default()
 }
 
 fn profile_from_inline(json: &str) -> Option<LoginProfile> {

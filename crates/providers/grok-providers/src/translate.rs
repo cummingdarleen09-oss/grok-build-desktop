@@ -325,6 +325,7 @@ mod tests {
             model_hints: Vec::new(),
             models: Vec::new(),
             follow_latest: false,
+            model_info: Vec::new(),
         }
     }
 

@@ -34,6 +34,7 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
 xai-grok-models = { workspace = true }
+xai-grok-sampling-types = { path = "../../codegen/xai-grok-sampling-types" }
 keyring = { version = "3", optional = true }
 
 # keyring 3 has no default store. Without these features every platform gets

@@ -122,6 +122,10 @@ pub struct ProviderConfig {
     /// When true, `model` tracks the newest general Grok model. A settings pin sets this false.
     #[serde(default)]
     pub follow_latest: bool,
+    /// Display name, context windows, and effort menu per model id. For Grok
+    /// this mirrors `/v1/models`; for other providers the user edits it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_info: Vec<crate::models::ModelInfo>,
 }
 
 impl ProviderConfig {

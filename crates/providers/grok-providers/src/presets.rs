@@ -47,6 +47,7 @@ impl Preset {
             model_hints: self.model_hints.iter().map(|s| (*s).to_string()).collect(),
             models: listed(self.model, self.model_hints),
             follow_latest: self.follow_latest,
+            model_info: Vec::new(),
         }
     }
 }
@@ -88,7 +89,7 @@ pub fn builtin_presets() -> &'static [Preset] {
             token_field: TokenField::MaxTokens,
             extra_headers: &[],
             env_http_headers: &[],
-            model_hints: &["grok-4.7", "grok-4.6", "grok-4.5"],
+            model_hints: &["grok-4.7", "grok-4.7-fast", "grok-4.6", "grok-4.5"],
             follow_latest: true,
         },
         Preset {
@@ -200,6 +201,9 @@ pub fn normalize_store(mut store: crate::types::ProviderStore) -> crate::types::
             provider.follow_latest = false;
         }
         fill_model_list(provider);
+        if provider.id != "xai" {
+            crate::models::seed_known_entries(provider);
+        }
     }
     let active_missing = store
         .active

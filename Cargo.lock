@@ -5427,6 +5427,7 @@ dependencies = [
  "tracing",
  "wiremock",
  "xai-grok-models",
+ "xai-grok-sampling-types",
 ]
 
 [[package]]
