@@ -14,8 +14,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use xai_grok_login::flow::run_auth_flow_interactive;
 use xai_grok_login::{
-    perform_logout, try_ensure_fresh_auth, AuthManager, AuthUrlInfo, GrokComConfig,
-    LoginTransportOverride, CLI_CHAT_PROXY_BASE_URL_DEFAULT,
+    AuthManager, AuthUrlInfo, CLI_CHAT_PROXY_BASE_URL_DEFAULT, GrokComConfig,
+    LoginTransportOverride, perform_logout, try_ensure_fresh_auth,
 };
 
 struct LoginSlot {
@@ -103,8 +103,27 @@ async fn run_login(
 }
 
 #[tauri::command]
-pub fn grok_account() -> LoginProfile {
-    grok_providers::read_login_profile()
+pub async fn grok_account() -> LoginProfile {
+    tauri::async_runtime::spawn_blocking(grok_providers::read_login_profile)
+        .await
+        .unwrap_or_else(|_| grok_providers::read_login_profile())
+}
+
+/// Refreshes an expired Grok session before a request. Returns false when the
+/// session could not be refreshed within the time limit.
+pub async fn refresh_session() -> bool {
+    if slot().busy.load(Ordering::SeqCst) {
+        return false;
+    }
+    let config = GrokComConfig::default();
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            try_ensure_fresh_auth(&config, proxy_url()),
+        )
+        .await,
+        Ok(Some(_))
+    )
 }
 
 #[tauri::command]
@@ -165,14 +184,17 @@ pub fn grok_login_cancel() {
 }
 
 #[tauri::command]
-pub fn grok_logout() -> Result<LoginProfile, String> {
+pub async fn grok_logout() -> Result<LoginProfile, String> {
     if slot().busy.load(Ordering::SeqCst) {
         return Err("Sign-in is still running.".into());
     }
-    let config = GrokComConfig::default();
-    let manager = auth_manager(config);
-    perform_logout(&manager, None, || {}).map_err(|error| error.to_string())?;
-    Ok(grok_providers::read_login_profile())
+    tauri::async_runtime::spawn_blocking(|| {
+        let manager = auth_manager(GrokComConfig::default());
+        perform_logout(&manager, None, || {}).map_err(|error| error.to_string())?;
+        Ok(grok_providers::read_login_profile())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -181,9 +203,17 @@ pub async fn grok_refresh() -> Result<LoginProfile, String> {
         return Err("Sign-in is still running.".into());
     }
     let config = GrokComConfig::default();
-    match try_ensure_fresh_auth(&config, proxy_url()).await {
-        Some(_) => Ok(grok_providers::read_login_profile()),
-        None => Err("Could not refresh the Grok session. Sign in again.".into()),
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        try_ensure_fresh_auth(&config, proxy_url()),
+    )
+    .await
+    {
+        Ok(Some(_)) => Ok(grok_providers::read_login_profile()),
+        Ok(None) => Err("Could not refresh the Grok session. Sign in again.".into()),
+        Err(_) => {
+            Err("Refreshing the Grok session timed out. Check the network and try again.".into())
+        }
     }
 }
 

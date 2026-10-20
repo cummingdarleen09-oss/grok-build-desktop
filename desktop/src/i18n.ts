@@ -113,7 +113,7 @@ const en = {
   "settings.none": "No key yet",
   "settings.session": "Saved session",
   "settings.latest": "Always use the newest Grok",
-  "settings.latestHint": "On each launch, if a session or an API key is available, the newest general Grok model from api.x.ai/v1/models is selected. Uncheck this and edit the model name to pin one. Offline, the fallback is grok-4.7.",
+  "settings.latestHint": "On each launch, if a session or an API key is available, the newest general Grok model from api.x.ai/v1/models is selected in the background. Uncheck this and edit the model name to pin one. Offline, the fallback is grok-4.7.",
   "settings.responses": "xAI Responses",
   "settings.context": "Context window",
   "settings.format": "API format",
@@ -191,6 +191,38 @@ const en = {
   "prov.oauthFirst": "A signed-in session is used before an API key.",
   "prov.loginDesktopOnly": "Sign-in opens the system browser from the desktop app.",
   "chat.copy": "Copy",
+  "chat.send": "Send",
+  "chat.sendHint": "Enter to send · Shift+Enter for a new line",
+  "chat.openSettings": "Open Settings",
+  "chat.dismiss": "Dismiss",
+  "chat.noProvider": "No model provider is ready. Sign in to Grok or add a provider with an API key in Settings → Model providers.",
+  "chat.approvalWaiting": "A tool call is waiting for your approval in the chat.",
+  "repo.more": "Show more",
+  "boot.loading": "Loading…",
+  "boot.failed": "Grok Desktop could not load its data.",
+  "boot.retry": "Retry",
+  "diag.title": "Diagnostics",
+  "diag.body": "When you report a problem, copy the log and attach it. API keys and tokens are masked.",
+  "diag.path": "Log file",
+  "diag.copy": "Copy logs",
+  "diag.open": "Open log folder",
+  "diag.copied": "Logs copied to the clipboard.",
+  "model.effort": "Reasoning effort",
+  "model.context": "Context window",
+  "model.compactAt": "Compacts at {percent}%",
+  "model.defaultHint": "Saved for this chat and as the default for new chats.",
+  "chat.compacted": "Earlier messages were summarized to fit the context window",
+  "prov.modelSettingsHint": "Leave blank to use the built-in values (the CLI's defaults for known models).",
+  "prov.modelWindow": "Context window",
+  "prov.modelEffort": "Reasoning effort",
+  "prov.effortAuto": "Default for the API",
+  "prov.effortOn": "Supported",
+  "prov.effortOff": "Not supported",
+  "prov.thinking": "Claude thinking",
+  "prov.thinkingAdaptive": "Adaptive (effort)",
+  "prov.thinkingBudget": "Token budget",
+  "prov.badWindow": "Context window must be sizes like 128K or 1M",
+  "error.unexpected": "Unexpected error",
 };
 
 const zh: Record<keyof typeof en, string> = {
@@ -306,7 +338,7 @@ const zh: Record<keyof typeof en, string> = {
   "settings.none": "尚未设置密钥",
   "settings.session": "已保存的会话",
   "settings.latest": "始终使用最新的 Grok",
-  "settings.latestHint": "每次启动时，如果有登录会话或 API 密钥，就从 api.x.ai/v1/models 里选择最新的通用 Grok 模型。取消勾选并修改模型名即可固定版本。离线时回退到 grok-4.7。",
+  "settings.latestHint": "每次启动时，如果有登录会话或 API 密钥，就在后台从 api.x.ai/v1/models 里选择最新的通用 Grok 模型。取消勾选并修改模型名即可固定版本。离线时回退到 grok-4.7。",
   "settings.responses": "xAI Responses",
   "settings.context": "上下文长度",
   "settings.format": "接口格式",
@@ -384,12 +416,59 @@ const zh: Record<keyof typeof en, string> = {
   "prov.oauthFirst": "已登录的会话优先于 API 密钥。",
   "prov.loginDesktopOnly": "登录会从桌面应用打开系统浏览器。",
   "chat.copy": "复制",
+  "chat.send": "发送",
+  "chat.sendHint": "Enter 发送 · Shift+Enter 换行",
+  "chat.openSettings": "打开设置",
+  "chat.dismiss": "关闭",
+  "chat.noProvider": "还没有可用的模型供应商。请在 设置 → 模型供应商 里登录 Grok，或添加一个带 API 密钥的供应商。",
+  "chat.approvalWaiting": "对话里有一个工具调用正在等待你的确认。",
+  "repo.more": "显示更多",
+  "boot.loading": "正在加载…",
+  "boot.failed": "Grok 桌面版无法加载数据。",
+  "boot.retry": "重试",
+  "diag.title": "诊断",
+  "diag.body": "反馈问题时，请复制日志并附上。API 密钥和令牌已被遮盖。",
+  "diag.path": "日志文件",
+  "diag.copy": "复制日志",
+  "diag.open": "打开日志文件夹",
+  "diag.copied": "日志已复制到剪贴板。",
+  "model.effort": "思考强度",
+  "model.context": "上下文大小",
+  "model.compactAt": "达到 {percent}% 时自动压缩",
+  "model.defaultHint": "保存到当前对话，并作为新对话的默认值。",
+  "chat.compacted": "较早的消息已被总结，以适应上下文大小",
+  "prov.modelSettingsHint": "留空则使用内置值（已知模型沿用 CLI 的默认值）。",
+  "prov.modelWindow": "上下文大小",
+  "prov.modelEffort": "思考强度",
+  "prov.effortAuto": "按接口默认",
+  "prov.effortOn": "支持",
+  "prov.effortOff": "不支持",
+  "prov.thinking": "Claude 思考方式",
+  "prov.thinkingAdaptive": "自适应（强度）",
+  "prov.thinkingBudget": "Token 预算",
+  "prov.badWindow": "上下文大小需写成 128K 或 1M 这样的格式",
+  "error.unexpected": "意外错误",
 };
 
 export type Key = keyof typeof en;
 
 export function translate(lang: Lang, key: Key): string {
   return lang === "zh-CN" ? zh[key] : en[key];
+}
+
+const zhEffort: Record<string, string> = {
+  none: "关闭",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "超高",
+  max: "最大",
+};
+
+/** The CLI's label in English; a Chinese name for the canonical levels. */
+export function effortName(lang: Lang, value: string, label: string): string {
+  return lang === "zh-CN" ? zhEffort[value] ?? label : label;
 }
 
 export function branchBanner(lang: Lang, title: string, index: number): string {
@@ -401,7 +480,8 @@ export const desktopShortcuts = [
   ["Ctrl/⌘ + N", "New chat", "新对话"],
   ["Ctrl/⌘ + K", "Search chats", "搜索对话"],
   ["Ctrl/⌘ + 1–9", "Open a sidebar chat", "打开侧栏里的对话"],
-  ["Ctrl/⌘ + Enter", "Send", "发送"],
+  ["Enter", "Send", "发送"],
+  ["Shift + Enter", "New line", "换行"],
   ["Shift + Tab", "Toggle plan mode", "切换计划模式"],
   ["Ctrl/⌘ + ,", "Settings", "设置"],
   ["Esc", "Stop or close", "停止或关闭"],

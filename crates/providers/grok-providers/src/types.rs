@@ -122,6 +122,10 @@ pub struct ProviderConfig {
     /// When true, `model` tracks the newest general Grok model. A settings pin sets this false.
     #[serde(default)]
     pub follow_latest: bool,
+    /// Display name, context windows, and effort menu per model id. For Grok
+    /// this mirrors `/v1/models`; for other providers the user edits it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_info: Vec<crate::models::ModelInfo>,
 }
 
 impl ProviderConfig {
@@ -192,6 +196,9 @@ pub struct Turn {
     /// DeepSeek reasoner requires this to be echoed back on later requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Anthropic's signature over `reasoning`, sent back with it while thinking is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_signature: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +211,7 @@ impl Turn {
             role: Role::System,
             text: text.into(),
             reasoning: None,
+            reasoning_signature: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -214,6 +222,7 @@ impl Turn {
             role: Role::User,
             text: text.into(),
             reasoning: None,
+            reasoning_signature: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -224,6 +233,7 @@ impl Turn {
             role: Role::Tool,
             text: text.into(),
             reasoning: None,
+            reasoning_signature: None,
             tool_calls: Vec::new(),
             tool_call_id: Some(id.into()),
         }
@@ -263,6 +273,10 @@ pub enum ProviderEvent {
     Reasoning {
         text: String,
     },
+    /// Anthropic `signature_delta` for the thinking block just streamed.
+    ReasoningSignature {
+        signature: String,
+    },
     ToolStart {
         index: u32,
         id: String,
@@ -293,6 +307,24 @@ pub enum ProviderError {
     Network(#[from] reqwest::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+impl ProviderError {
+    /// The message plus its source chain. reqwest's own message stops at
+    /// "error sending request", which hides "connection refused" or a DNS failure.
+    pub fn detailed(&self) -> String {
+        let mut text = self.to_string();
+        let mut source = std::error::Error::source(self);
+        while let Some(cause) = source {
+            let cause_text = cause.to_string();
+            if !cause_text.is_empty() && !text.contains(&cause_text) {
+                text.push_str(": ");
+                text.push_str(&cause_text);
+            }
+            source = cause.source();
+        }
+        text
+    }
 }
 
 pub fn redact_secret(body: &str, secret: &str) -> String {

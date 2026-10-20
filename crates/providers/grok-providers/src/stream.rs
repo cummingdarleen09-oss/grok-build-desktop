@@ -237,6 +237,17 @@ pub fn decode_anthropic_event(
                         }
                     }
                 }
+                Some("signature_delta") => {
+                    if let Some(signature) = delta
+                        .and_then(|delta| delta.get("signature"))
+                        .and_then(Value::as_str)
+                        .filter(|signature| !signature.is_empty())
+                    {
+                        events.push(ProviderEvent::ReasoningSignature {
+                            signature: signature.to_string(),
+                        });
+                    }
+                }
                 Some("input_json_delta") => {
                     if let Some(fragment) = delta
                         .and_then(|delta| delta.get("partial_json"))
@@ -407,6 +418,7 @@ fn json_u64(value: Option<&Value>) -> u64 {
 pub struct AssistantBuild {
     pub text: String,
     pub reasoning: String,
+    pub reasoning_signature: String,
     pub tool_calls: BTreeMap<u32, ToolCall>,
     pub stop: Option<StopReason>,
     pub input_tokens: u64,
@@ -418,6 +430,9 @@ impl AssistantBuild {
         match event {
             ProviderEvent::Text { text } => self.text.push_str(&text),
             ProviderEvent::Reasoning { text } => self.reasoning.push_str(&text),
+            ProviderEvent::ReasoningSignature { signature } => {
+                self.reasoning_signature.push_str(&signature)
+            }
             ProviderEvent::ToolStart { index, id, name } => {
                 self.tool_calls.entry(index).or_insert(ToolCall {
                     id,
@@ -456,6 +471,11 @@ impl AssistantBuild {
                 None
             } else {
                 Some(self.reasoning)
+            },
+            reasoning_signature: if self.reasoning_signature.is_empty() {
+                None
+            } else {
+                Some(self.reasoning_signature)
             },
             tool_calls: self.tool_calls.into_values().collect(),
             tool_call_id: None,
@@ -510,6 +530,8 @@ mod tests {
             "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
             "event: content_block_delta\n",
             "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig-1\"}}\n\n",
             "event: content_block_start\n",
             "data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\",\"input\":{}}}\n\n",
             "event: content_block_delta\n",
@@ -529,6 +551,7 @@ mod tests {
         }
         assert_eq!(build.text, "Hi");
         assert_eq!(build.reasoning, "plan");
+        assert_eq!(build.reasoning_signature, "sig-1");
         assert_eq!(build.stop, Some(StopReason::ToolUse));
         assert_eq!(build.input_tokens, 10);
         assert_eq!(build.output_tokens, 20);

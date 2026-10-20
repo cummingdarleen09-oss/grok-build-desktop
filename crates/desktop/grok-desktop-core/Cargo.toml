@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 blake3 = { workspace = true }
 chrono = { workspace = true }
+dirs = { workspace = true }
 futures-util = { workspace = true }
 grok-providers = { workspace = true }
 mermaid-to-svg = { workspace = true }
@@ -20,6 +21,8 @@ toml = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
+xai-grok-compaction = { path = "../../common/xai-grok-compaction" }
+xai-token-estimation = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

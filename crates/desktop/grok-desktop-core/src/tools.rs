@@ -373,23 +373,23 @@ async fn run_terminal(cwd: &Path, value: &Value) -> ToolOutput {
     if command.trim().is_empty() {
         return err("command is empty");
     }
-    let spawn = if cfg!(windows) {
-        tokio::process::Command::new("cmd")
-            .args(["/C", command])
-            .current_dir(cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+    let mut shell = if cfg!(windows) {
+        let mut shell = tokio::process::Command::new("cmd");
+        shell.args(["/C", command]);
+        shell
     } else {
-        tokio::process::Command::new("sh")
-            .args(["-c", command])
-            .current_dir(cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+        let mut shell = tokio::process::Command::new("sh");
+        shell.args(["-c", command]);
+        shell
     };
+    shell
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    crate::process::hide_window_tokio(&mut shell);
+    let spawn = shell.spawn();
     let child = match spawn {
         Ok(child) => child,
         Err(error) => return err(&format!("failed to start shell: {error}")),

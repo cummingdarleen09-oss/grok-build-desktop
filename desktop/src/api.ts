@@ -2,6 +2,41 @@ import type { Lang } from "./i18n";
 
 export type ProviderFormat = "openai" | "anthropic" | "responses";
 
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface EffortOption {
+  id: string;
+  value: ReasoningEffort;
+  label: string;
+  description?: string | null;
+  default: boolean;
+}
+
+/** One model's metadata, read like the CLI reads `/v1/models`. */
+export interface ModelInfo {
+  id: string;
+  name?: string;
+  context_window?: number;
+  context_windows?: number[];
+  supports_reasoning_effort?: boolean;
+  reasoning_effort?: ReasoningEffort;
+  reasoning_efforts?: EffortOption[];
+  auto_compact_threshold_percent?: number;
+  hidden?: boolean;
+  supported_in_api?: boolean;
+  thinking?: "adaptive" | "budget";
+  compaction_at_tokens?: boolean | number;
+}
+
+/** What the composer offers for one model, and what the next request uses. */
+export interface ChatOptions {
+  efforts: EffortOption[];
+  effort: ReasoningEffort | null;
+  context_windows: number[];
+  context_window: number;
+  compact_at_percent: number;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -22,6 +57,7 @@ export interface Provider {
   model_hints: string[];
   models: string[];
   follow_latest: boolean;
+  model_info?: ModelInfo[];
 }
 
 export interface ProviderStore {
@@ -37,6 +73,7 @@ export interface Settings {
   disabled_tools: string[];
   known_projects: string[];
   theme: "light" | "dark";
+  model_defaults?: Record<string, { reasoning_effort?: ReasoningEffort; context_window?: number }>;
 }
 
 export interface Automation {
@@ -86,7 +123,8 @@ export interface StoredTool {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  /** `compaction` holds the summary that replaced earlier messages. */
+  role: "user" | "assistant" | "compaction";
   text: string;
   reasoning: string;
   tool_calls: StoredTool[];
@@ -104,6 +142,8 @@ export interface Session {
   parent_session_id?: string | null;
   branched_from_message_id?: string | null;
   branched_at_index?: number | null;
+  reasoning_effort?: ReasoningEffort | null;
+  context_window?: number | null;
 }
 
 export interface SessionSummary {
@@ -142,6 +182,15 @@ export interface Bootstrap {
   grok_home: string;
   user_name: string;
   automations: Automation[];
+  log_path?: string;
+}
+
+export interface DiagnosticsInfo {
+  log_path: string;
+  log_dir: string;
+  version: string;
+  os: string;
+  arch: string;
 }
 
 export type AgentEvent =
@@ -151,6 +200,7 @@ export type AgentEvent =
   | { type: "tool_started"; id: string; name: string; arguments: string }
   | { type: "tool_finished"; id: string; output: string; is_error: boolean }
   | { type: "error"; message: string }
+  | { type: "status"; text: string }
   | { type: "done" };
 
 export interface AgentEnvelope {
@@ -167,7 +217,7 @@ const memory = seed();
 
 function seed(): Bootstrap {
   const providers: Provider[] = [
-    preset("xai", "Grok", "responses", "https://api.x.ai/v1", "grok-4.7", "XAI_API_KEY", "bearer", "max_tokens", 500000, ["grok-4.7", "grok-4.6", "grok-4.5"], true, true),
+    { ...preset("xai", "Grok", "responses", "https://api.x.ai/v1", "grok-4.7", "XAI_API_KEY", "bearer", "max_tokens", 500000, ["grok-4.7", "grok-4.7-fast", "grok-4.6", "grok-4.5"], true, true), model_info: mockGrokModels() },
     { ...preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY", "bearer", "max_tokens", 128000, ["deepseek-chat", "deepseek-reasoner"], true, false), builtin: false },
     { ...preset("relay", "Work relay", "responses", "https://relay.example/v1", "gpt-5", "RELAY_API_KEY", "bearer", "max_tokens", 128000, ["gpt-5", "gpt-5-mini"], true, false), builtin: false, name: "Work relay" },
   ];
@@ -345,6 +395,89 @@ function preset(
   };
 }
 
+function mockGrokModels(): ModelInfo[] {
+  const menu = (values: ReasoningEffort[], fallback: ReasoningEffort): EffortOption[] =>
+    values.map((value) => ({ id: value, value, label: value === "xhigh" ? "Extra High Effort" : `${value[0].toUpperCase()}${value.slice(1)} Effort`, default: value === fallback }));
+  return [
+    { id: "grok-4.7", name: "Grok 4.7", context_window: 500000, supports_reasoning_effort: true, reasoning_effort: "high", reasoning_efforts: menu(["xhigh", "high", "medium", "low"], "high"), auto_compact_threshold_percent: 80, compaction_at_tokens: true },
+    { id: "grok-4.7-fast", name: "Grok 4.7 Fast", context_window: 500000 },
+    { id: "grok-4.6", name: "Grok 4.6", context_window: 500000, supports_reasoning_effort: true, reasoning_effort: "high", reasoning_efforts: menu(["xhigh", "high", "medium", "low"], "high"), auto_compact_threshold_percent: 80, compaction_at_tokens: true },
+    { id: "grok-4.5", name: "Grok 4.5", context_window: 500000, supports_reasoning_effort: true, reasoning_effort: "high", reasoning_efforts: menu(["high", "medium", "low"], "high"), auto_compact_threshold_percent: 80, compaction_at_tokens: true },
+  ];
+}
+
+export function modelEntry(provider: Provider | undefined, id: string): ModelInfo | undefined {
+  return provider?.model_info?.find((entry) => entry.id === id);
+}
+
+/** The server's display name ("Grok 4.7 Fast"), else the id. */
+export function modelName(provider: Provider | undefined, id: string): string {
+  return modelEntry(provider, id)?.name?.trim() || id;
+}
+
+/** 500000 -> "500K", 1000000 -> "1M", the way the CLI prints windows. */
+export function formatWindow(tokens: number): string {
+  if (tokens >= 1_000_000 && tokens % 100_000 === 0) return `${trimZero(tokens / 1_000_000)}M`;
+  if (tokens >= 1000) return `${trimZero(Math.round(tokens / 100) / 10)}K`;
+  return String(tokens);
+}
+
+function trimZero(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+/** Browser preview only. The desktop app resolves this in Rust (`TurnOptions::choose`). */
+function mockChatOptions(provider: Provider, model: string, chat: { reasoning_effort?: ReasoningEffort | null; context_window?: number | null }, saved: { reasoning_effort?: ReasoningEffort; context_window?: number }): ChatOptions {
+  const entry = modelEntry(provider, model) ?? { id: model };
+  const listed = entry.reasoning_efforts ?? [];
+  const supports = listed.length > 0 || (entry.supports_reasoning_effort ?? provider.format === "anthropic");
+  const efforts: EffortOption[] = !supports ? [] : listed.length ? listed : (["low", "medium", "high", "xhigh"] as ReasoningEffort[]).map((value) => ({ id: value, value, label: value === "xhigh" ? "X-High" : `${value[0].toUpperCase()}${value.slice(1)}`, default: entry.reasoning_effort === value }));
+  const defaultEffort = efforts.find((option) => option.default)?.value ?? (efforts.some((option) => option.value === entry.reasoning_effort) ? entry.reasoning_effort! : null);
+  const offered = (value?: ReasoningEffort | null) => (value && efforts.some((option) => option.value === value) ? value : null);
+  const windows = entry.context_windows?.length ? entry.context_windows : [];
+  const defaultWindow = entry.context_window ?? windows[0] ?? (provider.context_window || 256000);
+  const choices = windows.includes(defaultWindow) ? windows : [defaultWindow, ...windows];
+  const window = [chat.context_window, saved.context_window].find((value) => value != null && choices.includes(value)) ?? defaultWindow;
+  return {
+    efforts,
+    effort: offered(chat.reasoning_effort) ?? offered(saved.reasoning_effort) ?? defaultEffort,
+    context_windows: choices,
+    context_window: window,
+    compact_at_percent: entry.auto_compact_threshold_percent ?? 85,
+  };
+}
+
+export async function chatOptions(sessionId: string | null, providerId: string, model: string): Promise<ChatOptions> {
+  if (!inTauri()) {
+    const provider = memory.providers.providers.find((item) => item.id === providerId);
+    if (!provider) throw new Error("no provider");
+    const session = sessionId ? memorySessions.get(sessionId) : undefined;
+    const chat = session && session.provider_id === providerId && session.model === model ? session : {};
+    return mockChatOptions(provider, model, chat, memory.settings.model_defaults?.[`${providerId}/${model}`] ?? {});
+  }
+  return invoke<ChatOptions>("chat_options", { sessionId, providerId, model });
+}
+
+/** Saves the choice for the chat (when there is one) and as this model's default. */
+export async function setChatOptions(sessionId: string | null, providerId: string, model: string, change: { effort?: ReasoningEffort; contextWindow?: number }): Promise<ChatOptions> {
+  if (!inTauri()) {
+    const key = `${providerId}/${model}`;
+    const defaults = { ...(memory.settings.model_defaults ?? {}) };
+    const saved = { ...(defaults[key] ?? {}) };
+    if (change.effort) saved.reasoning_effort = change.effort;
+    if (change.contextWindow) saved.context_window = change.contextWindow;
+    defaults[key] = saved;
+    memory.settings.model_defaults = defaults;
+    const session = sessionId ? memorySessions.get(sessionId) : undefined;
+    if (session && session.provider_id === providerId && session.model === model) {
+      if (change.effort) session.reasoning_effort = change.effort;
+      if (change.contextWindow) session.context_window = change.contextWindow;
+    }
+    return chatOptions(sessionId, providerId, model);
+  }
+  return invoke<ChatOptions>("set_chat_options", { sessionId, providerId, model, effort: change.effort ?? null, contextWindow: change.contextWindow ?? null });
+}
+
 export function providerModels(provider: Provider): string[] {
   const source = provider.models?.length ? provider.models : provider.model_hints ?? [];
   const models: string[] = [];
@@ -391,9 +524,72 @@ export async function loadBootstrap(): Promise<Bootstrap> {
   return invoke<Bootstrap>("bootstrap");
 }
 
+export async function listChats(): Promise<SessionSummary[]> {
+  if (!inTauri()) return structuredClone(memory.sessions);
+  return invoke<SessionSummary[]>("list_chats");
+}
+
+/** Rejects with a message the user can act on when the provider has no usable credential. */
+export async function checkReady(providerId: string): Promise<void> {
+  if (!inTauri()) {
+    const provider = memory.providers.providers.find((item) => item.id === providerId);
+    if (!provider || !provider.enabled) throw new Error("No model provider is ready. Open Settings → Model providers.");
+    const status = memory.secrets.find((item) => item.id === providerId);
+    if (!status || !(status.location || status.from_env || status.from_session)) {
+      throw new Error(`${provider.name} has no credential yet. Sign in to Grok or save an API key in Settings → Model providers.`);
+    }
+    return;
+  }
+  await invoke("check_ready", { providerId });
+}
+
+export async function onProvidersUpdated(handler: (update: { providers: ProviderStore; secrets: SecretStatus[] }) => void): Promise<() => void> {
+  if (!inTauri()) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ providers: ProviderStore; secrets: SecretStatus[] }>("providers-updated", (event) => handler(event.payload));
+}
+
+export async function diagnosticsInfo(): Promise<DiagnosticsInfo> {
+  if (!inTauri()) return { log_path: "~/.grok/desktop.log", log_dir: "~/.grok", version: "browser", os: navigator.platform, arch: "" };
+  return invoke<DiagnosticsInfo>("diagnostics_info");
+}
+
+export async function readLogs(): Promise<string> {
+  if (!inTauri()) return "Browser preview: logs are written by the desktop app.";
+  return invoke<string>("read_logs");
+}
+
+export async function openLogFolder(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke("open_log_folder");
+}
+
+/** Best effort: diagnostics must never throw into the UI. */
+export function logFrontend(level: "info" | "warn" | "error", message: string): void {
+  if (!inTauri()) return;
+  invoke("log_frontend", { level, message: message.slice(0, 4000) }).catch(() => undefined);
+}
+
+export async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    if (!ok) throw new Error("clipboard unavailable");
+  }
+}
+
 export async function saveSettings(settings: Settings): Promise<void> {
   if (!inTauri()) {
-    memory.settings = settings;
+    memory.settings = { ...settings, model_defaults: memory.settings.model_defaults };
     return;
   }
   await invoke("save_desktop_settings", { settings });
@@ -552,6 +748,10 @@ export async function setChatModel(id: string, providerId: string, model: string
   if (!inTauri()) {
     const session = memorySessions.get(id);
     if (!session) throw new Error("missing session");
+    if (session.provider_id !== providerId || session.model !== model) {
+      session.reasoning_effort = null;
+      session.context_window = null;
+    }
     session.provider_id = providerId;
     session.model = model;
     remember(session);

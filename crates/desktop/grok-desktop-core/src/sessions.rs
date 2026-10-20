@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use grok_providers::{Role, Turn};
+use grok_providers::{ReasoningEffort, Role, Turn};
 
 /// Filesystem component limit shared with upstream `encode_cwd_dirname`.
 const MAX_DIRNAME_BYTES: usize = 255;
@@ -21,12 +21,16 @@ pub struct StoredTool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatMessage {
     pub id: String,
-    /// `user` or `assistant`.
+    /// `user`, `assistant`, or `compaction`. A compaction message holds the
+    /// summary that replaces everything before it in later requests.
     pub role: String,
     #[serde(default)]
     pub text: String,
     #[serde(default)]
     pub reasoning: String,
+    /// Anthropic's signature over `reasoning`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning_signature: String,
     #[serde(default)]
     pub tool_calls: Vec<StoredTool>,
 }
@@ -51,6 +55,12 @@ pub struct Session {
     /// 1-based index of the chosen message in the parent transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branched_at_index: Option<u32>,
+    /// This chat's effort. `None` uses the saved default for the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// This chat's context window in tokens. `None` uses the saved default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +106,8 @@ pub fn create_session(cwd: &str, provider_id: &str, model: &str, title: &str) ->
         parent_session_id: None,
         branched_from_message_id: None,
         branched_at_index: None,
+        reasoning_effort: None,
+        context_window: None,
     }
 }
 
@@ -191,6 +203,8 @@ pub fn branch_from_session(
         parent_session_id: Some(parent.id.clone()),
         branched_from_message_id: Some(message_id.to_string()),
         branched_at_index: Some((index as u32) + 1),
+        reasoning_effort: parent.reasoning_effort,
+        context_window: parent.context_window,
     })
 }
 
@@ -216,11 +230,18 @@ pub fn close_open_tool_round(messages: &mut Vec<ChatMessage>) {
     }
 }
 
-/// Provider turns for `messages`, with dangling tool calls omitted.
+pub const COMPACTION_ROLE: &str = "compaction";
+
+/// Provider turns for `messages`, with dangling tool calls omitted. The last
+/// compaction message stands in, as a user turn, for everything before it.
 pub fn conversation_turns(messages: &[ChatMessage]) -> Vec<Turn> {
+    let start = messages
+        .iter()
+        .rposition(|message| message.role == COMPACTION_ROLE)
+        .unwrap_or(0);
     let mut turns = Vec::new();
-    for message in messages {
-        if message.role == "user" {
+    for message in &messages[start..] {
+        if message.role == "user" || message.role == COMPACTION_ROLE {
             turns.push(Turn::user(&message.text));
             continue;
         }
@@ -249,6 +270,8 @@ pub fn conversation_turns(messages: &[ChatMessage]) -> Vec<Turn> {
             } else {
                 Some(message.reasoning.clone())
             },
+            reasoning_signature: Some(message.reasoning_signature.clone())
+                .filter(|signature| !signature.is_empty()),
             tool_calls: calls.clone(),
             tool_call_id: None,
         });
@@ -386,9 +409,10 @@ fn migrate_flat_sessions(home: &Path) -> Result<(), String> {
     if !root.exists() {
         return Ok(());
     }
-    let entries = std::fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
@@ -405,22 +429,39 @@ fn migrate_flat_sessions(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The fields a sidebar row needs. Message bodies are skipped while parsing,
+/// which keeps listing fast when transcripts are large.
+#[derive(Deserialize)]
+struct SessionHeader {
+    id: String,
+    title: String,
+    cwd: String,
+    provider_id: String,
+    model: String,
+    updated_at: String,
+    #[serde(default)]
+    parent_session_id: Option<String>,
+    #[serde(default)]
+    branched_from_message_id: Option<String>,
+    #[serde(default)]
+    branched_at_index: Option<u32>,
+}
+
 fn read_desktop_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
     let root = desktop_root(home);
-    if !root.exists() {
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return Ok(Vec::new());
-    }
+    };
     let mut sessions = Vec::new();
-    let entries = std::fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+    for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        let nested = std::fs::read_dir(&path).map_err(|error| error.to_string())?;
-        for file in nested {
-            let file = file.map_err(|error| error.to_string())?;
+        let Ok(nested) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for file in nested.flatten() {
             let file_path = file.path();
             if file_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
@@ -428,10 +469,21 @@ fn read_desktop_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
             let Ok(text) = std::fs::read_to_string(&file_path) else {
                 continue;
             };
-            let Ok(session) = serde_json::from_str::<Session>(&text) else {
+            let Ok(header) = serde_json::from_str::<SessionHeader>(&text) else {
                 continue;
             };
-            sessions.push(summarize(&session, "desktop"));
+            sessions.push(SessionSummary {
+                id: header.id,
+                title: header.title,
+                model: header.model,
+                provider_id: header.provider_id,
+                cwd: header.cwd,
+                updated_at: header.updated_at,
+                parent_session_id: header.parent_session_id,
+                branched_from_message_id: header.branched_from_message_id,
+                branched_at_index: header.branched_at_index,
+                origin: "desktop".into(),
+            });
         }
     }
     Ok(sessions)
@@ -439,13 +491,13 @@ fn read_desktop_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
 
 fn read_classic_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
     let root = home.join("sessions");
-    if !root.exists() {
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return Ok(Vec::new());
-    }
+    };
     let mut sessions = Vec::new();
-    let entries = std::fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+    let mut normalized: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for entry in entries.flatten() {
         let cwd_dir = entry.path();
         if !cwd_dir.is_dir() {
             continue;
@@ -509,7 +561,10 @@ fn read_classic_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
                 title,
                 model,
                 provider_id: "classic".into(),
-                cwd: normalize_project_path(&cwd),
+                cwd: normalized
+                    .entry(cwd.clone())
+                    .or_insert_with(|| normalize_project_path(&cwd))
+                    .clone(),
                 updated_at,
                 parent_session_id: value
                     .get("parent_session_id")
@@ -582,6 +637,8 @@ pub fn load_classic_session_in(home: &Path, id: &str) -> Result<Session, String>
             .map(str::to_string),
         branched_from_message_id: None,
         branched_at_index: None,
+        reasoning_effort: None,
+        context_window: None,
     })
 }
 
@@ -624,6 +681,7 @@ fn read_classic_messages(path: &Path) -> Vec<ChatMessage> {
             text: text.trim().to_string(),
             reasoning: String::new(),
             tool_calls: Vec::new(),
+            reasoning_signature: String::new(),
         });
     }
     messages
@@ -663,21 +721,6 @@ fn collect_text(value: &serde_json::Value, found: &mut String) {
             }
         }
         _ => {}
-    }
-}
-
-fn summarize(session: &Session, origin: &str) -> SessionSummary {
-    SessionSummary {
-        id: session.id.clone(),
-        title: session.title.clone(),
-        model: session.model.clone(),
-        provider_id: session.provider_id.clone(),
-        cwd: session.cwd.clone(),
-        updated_at: session.updated_at.clone(),
-        parent_session_id: session.parent_session_id.clone(),
-        branched_from_message_id: session.branched_from_message_id.clone(),
-        branched_at_index: session.branched_at_index,
-        origin: origin.to_string(),
     }
 }
 
@@ -769,6 +812,7 @@ mod tests {
             text: text.into(),
             reasoning: String::new(),
             tool_calls: tools,
+            reasoning_signature: String::new(),
         }
     }
 
@@ -846,6 +890,8 @@ mod tests {
                 parent_session_id: None,
                 branched_from_message_id: None,
                 branched_at_index: None,
+                reasoning_effort: None,
+                context_window: None,
             })
             .unwrap(),
         )

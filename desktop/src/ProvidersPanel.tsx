@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   type GrokAccount,
+  type ModelInfo,
   type Provider,
   type ProviderFormat,
   type ProviderStore,
@@ -9,11 +10,13 @@ import {
   clearSecret,
   desktopShell,
   fetchModels,
+  formatWindow,
   grokAccount,
   grokLogin,
   grokLoginCancel,
   grokLogout,
   grokRefresh,
+  modelName,
   openExternalUrl,
   providerModels,
   providerTemplates,
@@ -34,10 +37,77 @@ interface FormState {
   models: string[];
   enabled: boolean;
   existing: boolean;
+  /** Per-model overrides as typed: windows like "200K, 1M", effort auto/on/off, Claude thinking style. */
+  tuning: Record<string, ModelTuning>;
+}
+
+interface ModelTuning {
+  windows: string;
+  effort: "auto" | "on" | "off";
+  thinking: "auto" | "adaptive" | "budget";
 }
 
 function blankForm(): FormState {
-  return { id: "", name: "", format: "responses", base_url: "https://", apiKey: "", models: [], enabled: true, existing: false };
+  return { id: "", name: "", format: "responses", base_url: "https://", apiKey: "", models: [], enabled: true, existing: false, tuning: {} };
+}
+
+function tuningOf(entry: ModelInfo | undefined): ModelTuning {
+  const windows = entry?.context_window != null ? [entry.context_window, ...(entry.context_windows ?? []).filter((window) => window !== entry.context_window)] : entry?.context_windows ?? [];
+  return {
+    windows: windows.map(formatWindow).join(", "),
+    effort: entry?.supports_reasoning_effort == null && !entry?.reasoning_efforts?.length ? "auto" : entry?.supports_reasoning_effort === false ? "off" : "on",
+    thinking: entry?.thinking ?? "auto",
+  };
+}
+
+function tuningFor(models: string[], entries: ModelInfo[] | undefined): Record<string, ModelTuning> {
+  return Object.fromEntries(models.map((id) => [id, tuningOf(entries?.find((entry) => entry.id === id))]));
+}
+
+/** "200K, 1M" -> [200000, 1000000]; null when something is not a size. */
+export function parseWindows(text: string): number[] | null {
+  const parts = text.split(/[\s,，]+/).map((part) => part.trim()).filter(Boolean);
+  const out: number[] = [];
+  for (const part of parts) {
+    const match = /^(\d+(?:\.\d+)?)([kKmM]?)$/.exec(part);
+    if (!match) return null;
+    const scale = match[2].toLowerCase() === "m" ? 1_000_000 : match[2].toLowerCase() === "k" ? 1000 : 1;
+    const value = Math.round(Number(match[1]) * scale);
+    if (value < 1000) return null;
+    if (!out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+/** Fold the form's overrides into the saved entries, keeping server fields such as names and effort menus. */
+function applyTuning(models: string[], tuning: Record<string, ModelTuning>, previous: ModelInfo[] | undefined): ModelInfo[] {
+  const out: ModelInfo[] = [];
+  for (const id of models) {
+    const entry: ModelInfo = { ...(previous?.find((item) => item.id === id) ?? { id }) };
+    const wanted = tuning[id];
+    if (wanted) {
+      const windows = parseWindows(wanted.windows) ?? [];
+      delete entry.context_window;
+      delete entry.context_windows;
+      if (windows.length) {
+        entry.context_window = windows[0];
+        if (windows.length > 1) entry.context_windows = windows.slice(1);
+      }
+      if (wanted.effort === "auto") {
+        delete entry.supports_reasoning_effort;
+      } else if (wanted.effort === "off") {
+        entry.supports_reasoning_effort = false;
+        delete entry.reasoning_efforts;
+        delete entry.reasoning_effort;
+      } else {
+        entry.supports_reasoning_effort = true;
+      }
+      if (wanted.thinking === "auto") delete entry.thinking;
+      else entry.thinking = wanted.thinking;
+    }
+    if (Object.keys(entry).length > 1) out.push(entry);
+  }
+  return out;
 }
 
 function slugify(name: string): string {
@@ -59,6 +129,14 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+/** Most OpenAI-compatible relays (DeepSeek, Kimi, one-api) reject max_completion_tokens; only OpenAI itself requires it. */
+function tokenField(format: ProviderFormat, baseUrl: string, previous?: Provider): Provider["token_field"] {
+  if (format !== "openai") return "max_tokens";
+  if (previous && previous.format === "openai") return previous.token_field;
+  const host = hostOf(baseUrl).toLowerCase();
+  return host.endsWith("openai.com") || host.endsWith("openai.azure.com") ? "max_completion_tokens" : "max_tokens";
 }
 
 function letter(name: string): string {
@@ -88,6 +166,7 @@ export function ProvidersPanel(props: {
   const [notice, setNotice] = useState<string | null>(null);
   const grok = providers.find((provider) => provider.id === "xai");
   const custom = providers.filter((provider) => provider.id !== "xai");
+  const columns = form.format === "anthropic" ? "minmax(0, 1fr) 110px 130px 130px 28px" : "minmax(0, 1fr) 110px 130px 28px";
 
   async function persist(next: Provider[], nextActive: string | null) {
     const saved = await saveProviders({ active: nextActive, providers: next });
@@ -133,6 +212,7 @@ export function ProvidersPanel(props: {
       models: [...template.models],
       enabled: true,
       existing: false,
+      tuning: tuningFor(template.models, undefined),
     });
     setShowKey(false);
     setDraftModel("");
@@ -152,6 +232,7 @@ export function ProvidersPanel(props: {
       models: providerModels(provider),
       enabled: provider.enabled,
       existing: true,
+      tuning: tuningFor(providerModels(provider), provider.model_info),
     });
     setShowKey(false);
     setDraftModel("");
@@ -163,7 +244,7 @@ export function ProvidersPanel(props: {
   function addDraftModel() {
     const id = draftModel.trim();
     if (!id || form.models.includes(id)) return;
-    setForm({ ...form, models: [...form.models, id] });
+    setForm({ ...form, models: [...form.models, id], tuning: { ...form.tuning, [id]: form.tuning[id] ?? tuningOf(undefined) } });
     setDraftModel("");
   }
 
@@ -195,6 +276,11 @@ export function ProvidersPanel(props: {
       props.setError(t("prov.needModel"));
       return;
     }
+    const badWindow = models.find((id) => form.tuning[id] && parseWindows(form.tuning[id].windows) == null);
+    if (badWindow) {
+      props.setError(`${t("prov.badWindow")}: ${badWindow}`);
+      return;
+    }
     const hasKey = Boolean(form.apiKey.trim()) || secrets.some((secret) => secret.id === form.id && (secret.location || secret.from_env || secret.from_session));
     if (!form.existing && !hasKey) {
       props.setError(t("prov.needKey"));
@@ -214,17 +300,18 @@ export function ProvidersPanel(props: {
       env_key: envKey,
       env_key_fallbacks: previous?.env_key_fallbacks ?? [],
       context_window: previous?.context_window ?? (anthropic ? 200000 : 128000),
-      extra_headers: anthropic ? { "anthropic-version": "2023-06-01" } : {},
+      extra_headers: previous && previous.format === form.format ? previous.extra_headers : anthropic ? { "anthropic-version": "2023-06-01" } : {},
       env_http_headers: anthropic ? { "x-api-key": envKey } : {},
       auth: anthropic ? "x_api_key" : "bearer",
       enabled: form.enabled,
       temperature: previous?.temperature ?? null,
       max_tokens: previous?.max_tokens ?? 8192,
-      token_field: form.format === "openai" ? "max_completion_tokens" : "max_tokens",
+      token_field: tokenField(form.format, form.base_url, previous),
       builtin: false,
       model_hints: models,
       models,
       follow_latest: false,
+      model_info: applyTuning(models, form.tuning, previous?.model_info),
     };
     setBusy(true);
     props.setError(null);
@@ -237,8 +324,9 @@ export function ProvidersPanel(props: {
         });
       }
       const next = [...providers.filter((item) => item.id !== id), provider];
-      await persist(next, active);
-      setForm({ ...form, id, apiKey: "", existing: true, models });
+      const saved = await persist(next, active);
+      const stored = saved.providers.find((item) => item.id === id);
+      setForm({ ...form, id, apiKey: "", existing: true, models, tuning: tuningFor(models, stored?.model_info) });
       setSelection(id);
       setNotice(t("prov.saved"));
     } catch (reason) {
@@ -362,7 +450,7 @@ export function ProvidersPanel(props: {
               <p className="hint">{t("settings.latestHint")}</p>
               <label className="field">{t("settings.model")}
                 <select value={grok.model} onChange={(event) => void pinGrok(false, event.target.value)}>
-                  {providerModels(grok).map((model) => <option key={model}>{model}</option>)}
+                  {providerModels(grok).map((model) => <option key={model} value={model}>{modelName(grok, model)}</option>)}
                 </select>
               </label>
               <GrokKey t={t} onSave={async (secret) => {
@@ -416,12 +504,40 @@ export function ProvidersPanel(props: {
                   <span>{t("prov.models")}</span>
                   <div className="prov-models">
                     {form.models.length === 0 && <p className="hint">{t("prov.modelsEmpty")}</p>}
-                    {form.models.map((model) => (
-                      <div key={model} className="prov-models__row">
-                        <span>{model}</span>
-                        <button type="button" className="ghost" onClick={() => setForm({ ...form, models: form.models.filter((item) => item !== model) })}>×</button>
+                    {form.models.length > 0 && (
+                      <div className="prov-models__row prov-models__grid prov-models__head" style={{ gridTemplateColumns: columns }}>
+                        <span>{t("prov.modelId")}</span>
+                        <span>{t("prov.modelWindow")}</span>
+                        <span>{t("prov.modelEffort")}</span>
+                        {form.format === "anthropic" && <span>{t("prov.thinking")}</span>}
+                        <span />
                       </div>
-                    ))}
+                    )}
+                    {form.models.map((model) => {
+                      const tuning = form.tuning[model] ?? tuningOf(undefined);
+                      const tune = (change: Partial<ModelTuning>) => setForm((current) => ({ ...current, tuning: { ...current.tuning, [model]: { ...tuning, ...change } } }));
+                      const invalid = parseWindows(tuning.windows) == null;
+                      return (
+                        <div key={model} className="prov-models__row prov-models__grid" style={{ gridTemplateColumns: columns }}>
+                          <span title={model}>{model}</span>
+                          <input aria-label={`${t("prov.modelWindow")} ${model}`} className={invalid ? "invalid" : ""} value={tuning.windows} placeholder="128K, 1M" onChange={(event) => tune({ windows: event.target.value })} />
+                          <select aria-label={`${t("prov.modelEffort")} ${model}`} value={tuning.effort} onChange={(event) => tune({ effort: event.target.value as ModelTuning["effort"] })}>
+                            <option value="auto">{t("prov.effortAuto")}</option>
+                            <option value="on">{t("prov.effortOn")}</option>
+                            <option value="off">{t("prov.effortOff")}</option>
+                          </select>
+                          {form.format === "anthropic" && (
+                            <select aria-label={`${t("prov.thinking")} ${model}`} value={tuning.thinking} onChange={(event) => tune({ thinking: event.target.value as ModelTuning["thinking"] })}>
+                              <option value="auto">{t("prov.effortAuto")}</option>
+                              <option value="adaptive">{t("prov.thinkingAdaptive")}</option>
+                              <option value="budget">{t("prov.thinkingBudget")}</option>
+                            </select>
+                          )}
+                          <button type="button" className="ghost" onClick={() => setForm({ ...form, models: form.models.filter((item) => item !== model) })}>×</button>
+                        </div>
+                      );
+                    })}
+                    {form.models.length > 0 && <p className="hint">{t("prov.modelSettingsHint")}</p>}
                     <div className="prov-models__add">
                       <input value={draftModel} placeholder={t("prov.modelId")} onChange={(event) => setDraftModel(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addDraftModel(); } }} />
                       <button type="button" className="ghost" onClick={addDraftModel}>{t("prov.addModel")}</button>
@@ -431,7 +547,7 @@ export function ProvidersPanel(props: {
                   {remote.length > 0 && (
                     <div className="prov-remote">
                       {remote.map((model) => (
-                        <button key={model} type="button" className="prov-presets__chip" onClick={() => setForm((current) => current.models.includes(model) ? current : { ...current, models: [...current.models, model] })}>{model}</button>
+                        <button key={model} type="button" className="prov-presets__chip" onClick={() => setForm((current) => current.models.includes(model) ? current : { ...current, models: [...current.models, model], tuning: { ...current.tuning, [model]: current.tuning[model] ?? tuningOf(undefined) } })}>{model}</button>
                       ))}
                     </div>
                   )}

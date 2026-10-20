@@ -64,9 +64,23 @@ pub fn load_or_default_store() -> ProviderStore {
         Ok(None) => crate::presets::default_store(),
         Err(error) => {
             tracing::warn!(%error, "providers.toml failed to parse; using defaults");
+            keep_unreadable_copy(&providers_path());
             crate::presets::default_store()
         }
     }
+}
+
+/// The next save writes defaults over an unparsable providers.toml, so keep
+/// the user's text next to it first. One copy per distinct content.
+fn keep_unreadable_copy(path: &Path) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let backup = path.with_extension("toml.unreadable");
+    if std::fs::read(&backup).is_ok_and(|existing| existing == bytes) {
+        return;
+    }
+    let _ = std::fs::write(backup, bytes);
 }
 
 /// Insert enabled providers from `providers.toml` when those ids are not already set.
@@ -409,12 +423,22 @@ pub fn sync_cli_config(providers: &[ProviderConfig]) -> Result<PathBuf, String> 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    // A file the parser rejects is left alone. Replacing it would erase the
+    // user's CLI settings and MCP servers.
     let mut document = existing
         .parse::<toml_edit::DocumentMut>()
-        .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+        .map_err(|error| format!("{} could not be parsed: {error}", path.display()))?;
+    let before = document.to_string();
     upsert_cli_config(&mut document, providers);
-    std::fs::write(&path, document.to_string()).map_err(|error| error.to_string())?;
+    let after = document.to_string();
+    if after != before || existing.is_empty() {
+        std::fs::write(&path, after).map_err(|error| error.to_string())?;
+    }
     Ok(path)
 }
 
@@ -422,6 +446,20 @@ pub fn sync_cli_config(providers: &[ProviderConfig]) -> Result<PathBuf, String> 
 mod tests {
     use super::*;
     use crate::presets::preset_by_id;
+
+    #[test]
+    fn an_unparsable_store_is_copied_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        std::fs::write(&path, "active = \"x\"\n[[providers]\nid = ").unwrap();
+        assert!(load_provider_store_from(&path).is_err());
+        keep_unreadable_copy(&path);
+        let backup = dir.path().join("providers.toml.unreadable");
+        assert_eq!(
+            std::fs::read_to_string(backup).unwrap(),
+            "active = \"x\"\n[[providers]\nid = "
+        );
+    }
 
     #[test]
     fn env_preset_does_not_clobber_user_model() {

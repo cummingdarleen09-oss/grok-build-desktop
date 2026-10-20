@@ -12,23 +12,28 @@ mod extensions;
 mod mcp;
 mod media;
 mod mermaid;
+pub mod process;
 mod sessions;
 mod settings;
 mod text;
 mod tools;
 
-pub use agent::{AgentEvent, TurnControl, run_turn};
+pub use agent::{AgentEvent, TurnControl, TurnOptions, run_turn};
 pub use automations::{Automation, load_automations, save_automations};
 pub use extensions::{ExtensionRecord, discover_extensions};
 pub use grok_providers;
-pub use mcp::McpPool;
+pub use mcp::{McpFingerprint, McpPool};
 pub use media::{MediaFile, list_media};
 pub use mermaid::render_mermaid;
 pub use sessions::{
-    ChatMessage, ProjectGroup, Session, SessionSummary, StoredTool, branch_session,
-    conversation_turns, create_session, delete_session, group_sessions, list_sessions,
-    load_classic_session, load_session, normalize_project_path, rename_session, save_session,
+    COMPACTION_ROLE, ChatMessage, ProjectGroup, Session, SessionSummary, StoredTool,
+    branch_session, conversation_turns, create_session, delete_session, group_sessions,
+    list_sessions, load_classic_session, load_session, normalize_project_path, rename_session,
+    save_session,
 };
-pub use settings::{DesktopSettings, load_settings, save_settings};
+pub use settings::{
+    DesktopSettings, ModelDefault, default_project_dir, load_settings, model_default_key,
+    save_settings, settings_path,
+};
 pub use text::tr;
 pub use tools::{ToolOutput, execute_tool, tool_defs};

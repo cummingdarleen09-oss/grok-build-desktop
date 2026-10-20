@@ -12,6 +12,7 @@
 
 mod client;
 mod config_merge;
+mod models;
 mod presets;
 mod secrets;
 mod stream;
@@ -26,17 +27,31 @@ pub use config_merge::{
     merge_env_presets_with, merge_store_presets, providers_path, save_provider_store,
     save_provider_store_to, sync_cli_config, upsert_cli_config,
 };
+pub use models::{
+    CompactionAtTokens, DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT, DEFAULT_CONTEXT_WINDOW, ModelInfo,
+    ModelOptions, ReasoningEffort, ReasoningEffortOption, ThinkingStyle, context_window_choices,
+    effort_label, known_model, known_models, parse_model_entries, parse_model_value,
+};
 pub use presets::{Preset, builtin_presets, default_store, normalize_store, template_presets};
 pub use secrets::{SecretLocation, SecretStore};
 pub use stream::{
     AnthropicAcc, AssistantBuild, OpenAiAcc, ResponsesAcc, SseDecoder, SseEvent,
     decode_anthropic_event, decode_openai_data, decode_responses_data,
 };
-pub use translate::{anthropic_request_body, endpoint_url, openai_request_body};
+pub use translate::{
+    anthropic_request_body, anthropic_request_body_with, endpoint_url, openai_request_body,
+    openai_request_body_with, request_body, responses_request_body, responses_request_body_with,
+    thinking_budget,
+};
 pub use types::*;
-pub use xai_auth::{has_login_session, pick_xai_secret, read_login_profile, LoginProfile};
+pub use xai_auth::{
+    LoginProfile, SessionIdentity, XaiSecretSource, has_login_session, pick_xai_secret,
+    read_login_profile, session_identity,
+};
 pub use xai_models::{
-    apply_choice, fetch_provider_models, refresh_xai_models, refresh_xai_models_blocking,
+    CLI_CHAT_PROXY_BASE_URL, ModelChoice, ModelListAuth, apply_choice, apply_known_models,
+    fetch_provider_models, offline_choice, refresh_xai_model_list, refresh_xai_models,
+    refresh_xai_models_blocking,
 };
 
 /// Read `~/.grok/providers.toml` (or `$GROK_HOME/providers.toml`) and the
