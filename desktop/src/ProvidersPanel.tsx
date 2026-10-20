@@ -166,6 +166,7 @@ export function ProvidersPanel(props: {
   const [notice, setNotice] = useState<string | null>(null);
   const grok = providers.find((provider) => provider.id === "xai");
   const custom = providers.filter((provider) => provider.id !== "xai");
+  const columns = form.format === "anthropic" ? "minmax(0, 1fr) 110px 130px 130px 28px" : "minmax(0, 1fr) 110px 130px 28px";
 
   async function persist(next: Provider[], nextActive: string | null) {
     const saved = await saveProviders({ active: nextActive, providers: next });
@@ -504,7 +505,7 @@ export function ProvidersPanel(props: {
                   <div className="prov-models">
                     {form.models.length === 0 && <p className="hint">{t("prov.modelsEmpty")}</p>}
                     {form.models.length > 0 && (
-                      <div className="prov-models__row prov-models__head">
+                      <div className="prov-models__row prov-models__grid prov-models__head" style={{ gridTemplateColumns: columns }}>
                         <span>{t("prov.modelId")}</span>
                         <span>{t("prov.modelWindow")}</span>
                         <span>{t("prov.modelEffort")}</span>
@@ -517,7 +518,7 @@ export function ProvidersPanel(props: {
                       const tune = (change: Partial<ModelTuning>) => setForm((current) => ({ ...current, tuning: { ...current.tuning, [model]: { ...tuning, ...change } } }));
                       const invalid = parseWindows(tuning.windows) == null;
                       return (
-                        <div key={model} className="prov-models__row">
+                        <div key={model} className="prov-models__row prov-models__grid" style={{ gridTemplateColumns: columns }}>
                           <span title={model}>{model}</span>
                           <input aria-label={`${t("prov.modelWindow")} ${model}`} className={invalid ? "invalid" : ""} value={tuning.windows} placeholder="128K, 1M" onChange={(event) => tune({ windows: event.target.value })} />
                           <select aria-label={`${t("prov.modelEffort")} ${model}`} value={tuning.effort} onChange={(event) => tune({ effort: event.target.value as ModelTuning["effort"] })}>

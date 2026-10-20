@@ -949,7 +949,9 @@ function ModelMenu(props: {
 }) {
   const { t } = props;
   const [open, setOpen] = useState(false);
+  const [below, setBelow] = useState(false);
   const [options, setOptions] = useState<ChatOptions | null>(null);
+  const anchor = useRef<HTMLButtonElement>(null);
   const current = props.providers.find((item) => item.id === props.providerId);
   const groups = props.providers.filter((item) => item.enabled && providerModels(item).length > 0);
   const model = props.model || current?.model || "";
@@ -984,16 +986,28 @@ function ModelMenu(props: {
   const parts = [current ? modelName(current, model) : model || "Grok 4.7"];
   if (effort) parts.push(effortName(props.lang, effort.value, effort.label));
   if (options) parts.push(formatWindow(options.context_window));
-  const label = current ? `${current.name} · ${parts.join(" · ")}` : parts.join(" · ");
+  const label = current && !parts[0].startsWith(current.name) ? `${current.name} · ${parts.join(" · ")}` : parts.join(" · ");
   const hasEffort = (options?.efforts.length ?? 0) > 0;
   const hasWindows = (options?.context_windows.length ?? 0) > 1;
   return (
     <div className="model-menu" onClick={(event) => event.stopPropagation()}>
-      <button type="button" className="model-pick" aria-haspopup="listbox" aria-expanded={open} title={label} onClick={() => setOpen((value) => !value)}>
+      <button
+        ref={anchor}
+        type="button"
+        className="model-pick"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={label}
+        onClick={() => {
+          // The empty-chat composer sits near the top, where an upward menu would be cut off.
+          setBelow((anchor.current?.getBoundingClientRect().top ?? 1000) < 400);
+          setOpen((value) => !value);
+        }}
+      >
         {label} ▾
       </button>
       {open && (
-        <div className={hasEffort || hasWindows ? "model-pop wide" : "model-pop"}>
+        <div className={`model-pop${hasEffort || hasWindows ? " wide" : ""}${below ? " below" : ""}`}>
           <div className="model-list" role="listbox" aria-label={t("prov.modelId")}>
             {groups.map((provider) => (
               <div key={provider.id} className="model-group">
