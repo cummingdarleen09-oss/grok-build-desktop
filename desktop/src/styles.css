@@ -141,14 +141,26 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .send:disabled { opacity: 0.35; cursor: default; }
 [data-theme="dark"] .send { background: #f4f4f5; color: #111; border-color: #f4f4f5; }
 .model-menu { position: relative; min-width: 0; }
-.model-pick { color: var(--text); border: 0; background: transparent; max-width: 240px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-pick { color: var(--text); border: 0; background: transparent; max-width: 340px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-pop {
   position: absolute; z-index: 25; bottom: 32px; left: 0; width: 260px; max-height: 280px; overflow: auto;
   background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px;
 }
 .model-group__name { color: var(--muted); font-size: 11px; padding: 6px 8px 2px; }
-.model-pop button { display: block; width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px; }
-.model-pop button.on, .model-pop button:hover { background: var(--hover); }
+.model-pop.wide { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 6px; width: 500px; max-height: 360px; overflow: hidden; }
+.model-list { overflow: auto; min-height: 0; }
+.model-pop.wide .model-list { max-height: 346px; }
+.model-pop button { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px; }
+.model-pop button.on { background: var(--active); font-weight: 560; }
+.model-pop button:hover { background: var(--hover); }
+.model-id { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-options { border-left: 1px solid var(--line); padding-left: 6px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.model-option { display: flex; flex-direction: column; }
+.model-options .hint { font-size: 11px; padding: 2px 8px; }
+.model-static { padding: 6px 8px; }
+.compaction { margin: 10px 0; color: var(--muted); font-size: 12px; }
+.compaction > summary { cursor: pointer; text-align: center; list-style: none; border-top: 1px dashed var(--line); padding-top: 6px; }
+.compaction[open] { border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
 .pills { display: flex; gap: 8px; margin-top: 10px; }
 .pill-btn { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--text); }
 .pill-btn.on { background: var(--active); }
@@ -252,6 +264,16 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .prov-models { border: 1px solid var(--line); border-radius: 10px; }
 .prov-models__row, .prov-models__add { padding: 6px 8px; }
 .prov-models__row { display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.prov-models__row { align-items: center; gap: 8px; }
+.prov-models__row > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov-models__row input { width: 110px; }
+.prov-models__row select { width: 130px; }
+.prov-models__row input.invalid { border-color: var(--danger); }
+.prov-models__head { color: var(--muted); font-size: 11px; }
+.prov-models__head > span:nth-child(2) { width: 110px; }
+.prov-models__head > span:nth-child(3), .prov-models__head > span:nth-child(4):not(:last-child) { width: 130px; }
+.prov-models__head > span:last-child { width: 28px; }
+.prov-models .hint { padding: 4px 8px; }
 .prov-badge { border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--ok); }
 fieldset.field { border: 0; padding: 0; margin: 0; }
 fieldset.field legend { margin-bottom: 6px; }

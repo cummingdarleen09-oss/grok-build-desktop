@@ -207,6 +207,21 @@ const en = {
   "diag.copy": "Copy logs",
   "diag.open": "Open log folder",
   "diag.copied": "Logs copied to the clipboard.",
+  "model.effort": "Reasoning effort",
+  "model.context": "Context window",
+  "model.compactAt": "Compacts at {percent}%",
+  "model.defaultHint": "Saved for this chat and as the default for new chats.",
+  "chat.compacted": "Earlier messages were summarized to fit the context window",
+  "prov.modelSettingsHint": "Leave blank to use the built-in values (the CLI's defaults for known models).",
+  "prov.modelWindow": "Context window",
+  "prov.modelEffort": "Reasoning effort",
+  "prov.effortAuto": "Default for the API",
+  "prov.effortOn": "Supported",
+  "prov.effortOff": "Not supported",
+  "prov.thinking": "Claude thinking",
+  "prov.thinkingAdaptive": "Adaptive (effort)",
+  "prov.thinkingBudget": "Token budget",
+  "prov.badWindow": "Context window must be sizes like 128K or 1M",
   "error.unexpected": "Unexpected error",
 };
 
@@ -417,6 +432,21 @@ const zh: Record<keyof typeof en, string> = {
   "diag.copy": "复制日志",
   "diag.open": "打开日志文件夹",
   "diag.copied": "日志已复制到剪贴板。",
+  "model.effort": "思考强度",
+  "model.context": "上下文大小",
+  "model.compactAt": "达到 {percent}% 时自动压缩",
+  "model.defaultHint": "保存到当前对话，并作为新对话的默认值。",
+  "chat.compacted": "较早的消息已被总结，以适应上下文大小",
+  "prov.modelSettingsHint": "留空则使用内置值（已知模型沿用 CLI 的默认值）。",
+  "prov.modelWindow": "上下文大小",
+  "prov.modelEffort": "思考强度",
+  "prov.effortAuto": "按接口默认",
+  "prov.effortOn": "支持",
+  "prov.effortOff": "不支持",
+  "prov.thinking": "Claude 思考方式",
+  "prov.thinkingAdaptive": "自适应（强度）",
+  "prov.thinkingBudget": "Token 预算",
+  "prov.badWindow": "上下文大小需写成 128K 或 1M 这样的格式",
   "error.unexpected": "意外错误",
 };
 
@@ -424,6 +454,21 @@ export type Key = keyof typeof en;
 
 export function translate(lang: Lang, key: Key): string {
   return lang === "zh-CN" ? zh[key] : en[key];
+}
+
+const zhEffort: Record<string, string> = {
+  none: "关闭",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "超高",
+  max: "最大",
+};
+
+/** The CLI's label in English; a Chinese name for the canonical levels. */
+export function effortName(lang: Lang, value: string, label: string): string {
+  return lang === "zh-CN" ? zhEffort[value] ?? label : label;
 }
 
 export function branchBanner(lang: Lang, title: string, index: number): string {

@@ -217,13 +217,18 @@ impl ProviderConfig {
         self.model_info.iter().find(|entry| entry.id == model)
     }
 
-    /// Composer options for `model`. A model without an entry gets no effort
-    /// menu and the provider's context window.
+    /// Composer options for `model`. What the entry leaves out comes from the
+    /// built-in catalog; an unknown model without an entry gets the provider's
+    /// context window and an effort menu only on Anthropic Messages.
     pub fn model_options(&self, model: &str) -> ModelOptions {
-        match self.model_entry(model) {
-            Some(entry) => entry.options(self.format, self.context_window),
-            None => ModelInfo::bare(model).options(self.format, self.context_window),
+        let mut entry = self
+            .model_entry(model)
+            .cloned()
+            .unwrap_or_else(|| ModelInfo::bare(model));
+        if let Some(known) = known_model(model) {
+            entry.fill_from(&known);
         }
+        entry.options(self.format, self.context_window)
     }
 }
 
@@ -406,7 +411,13 @@ pub fn known_models() -> Vec<ModelInfo> {
     let newest_menu = upstream
         .iter()
         .find(|entry| entry.id == "grok-4.6")
-        .map(|entry| (entry.reasoning_effort, entry.reasoning_efforts.clone()));
+        .map(|entry| {
+            (
+                entry.reasoning_effort,
+                entry.reasoning_efforts.clone(),
+                entry.compaction_at_tokens,
+            )
+        });
     let mut grok_47 = ModelInfo {
         name: Some("Grok 4.7".into()),
         context_window: Some(500_000),
@@ -414,9 +425,10 @@ pub fn known_models() -> Vec<ModelInfo> {
         auto_compact_threshold_percent: Some(80),
         ..ModelInfo::bare("grok-4.7")
     };
-    if let Some((default, menu)) = newest_menu {
+    if let Some((default, menu, compaction_at)) = newest_menu {
         grok_47.reasoning_effort = default;
         grok_47.reasoning_efforts = menu;
+        grok_47.compaction_at_tokens = compaction_at;
     }
     known.push(grok_47);
     known.push(ModelInfo {
@@ -631,6 +643,34 @@ mod tests {
         assert_eq!(entry.name.as_deref(), Some("Grok 4.7 (server)"));
         assert_eq!(entry.context_window, Some(500_000));
         assert!(!entry.reasoning_efforts.is_empty());
+    }
+
+    #[test]
+    fn a_provider_entry_overrides_the_catalog_and_blanks_fall_back_to_it() {
+        let mut provider = crate::presets::default_store()
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == "xai")
+            .unwrap();
+        provider.format = ProviderFormat::Anthropic;
+        provider.context_window = 128_000;
+        provider.model_info = vec![ModelInfo {
+            context_window: Some(1_000_000),
+            context_windows: vec![200_000],
+            ..ModelInfo::bare("claude-sonnet-4-5")
+        }];
+        let options = provider.model_options("claude-sonnet-4-5");
+        assert_eq!(options.default_context_window, 1_000_000);
+        assert_eq!(options.context_windows, vec![1_000_000, 200_000]);
+        assert_eq!(options.thinking, ThinkingStyle::Budget);
+
+        let blank = provider.model_options("claude-opus-4-5");
+        assert_eq!(blank.default_context_window, 200_000);
+        assert_eq!(blank.thinking, ThinkingStyle::Budget);
+        assert!(!blank.efforts.is_empty());
+
+        let unknown = provider.model_options("some-relay-model");
+        assert_eq!(unknown.default_context_window, 128_000);
     }
 
     #[test]

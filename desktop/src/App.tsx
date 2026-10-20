@@ -2,6 +2,8 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEvent,
   type Automation,
+  type ChatOptions,
+  type ReasoningEffort,
   type Bootstrap,
   type DiagnosticsInfo,
   type ExtensionRecord,
@@ -14,6 +16,9 @@ import {
   type Settings,
   branchChat,
   cancelPrompt,
+  chatOptions,
+  formatWindow,
+  modelName,
   checkReady,
   copyText,
   createChat,
@@ -38,9 +43,10 @@ import {
   saveSettings,
   sendPrompt,
   setChatModel,
+  setChatOptions,
   storeAutomations,
 } from "./api";
-import { branchBanner, desktopShortcuts, translate, type Key, type Lang } from "./i18n";
+import { branchBanner, desktopShortcuts, effortName, translate, type Key, type Lang } from "./i18n";
 import { ProvidersPanel } from "./ProvidersPanel";
 
 type Page = "chat" | "automations" | "kanban" | "media" | "customize" | "settings" | "shortcuts";
@@ -544,6 +550,7 @@ export function App() {
               setError={setError}
               setNotice={setNotice}
               setWaiting={setWaiting}
+              picked={picked}
               onSettings={() => { setError(null); setPage("settings"); }}
               onEnsure={ensureChat}
               onOpen={(id, messageId) => void openListed(boot.sessions.find((item) => item.id === id) ?? { id, title: id, model: "", provider_id: "", cwd: boot.settings.cwd, updated_at: "", origin: "desktop" }).then(() => messageId && setFocusMessageId(messageId))}
@@ -648,6 +655,7 @@ function ChatStage(props: {
   setError: SetError;
   setNotice: (notice: string | null) => void;
   setWaiting: (waiting: boolean) => void;
+  picked: { providerId: string; model: string } | null;
   onSettings: () => void;
   onEnsure: () => Promise<Session | null>;
   onOpen: (id: string, messageId?: string | null) => void;
@@ -804,7 +812,10 @@ function ChatStage(props: {
       branchName={props.branchName}
       setBranchName={props.setBranchName}
       cwd={session?.cwd || props.boot.settings.cwd}
-      model={session?.model || provider?.model || ""}
+      model={session?.model || (props.picked && props.picked.providerId === provider?.id ? props.picked.model : provider?.model) || ""}
+      lang={props.lang}
+      sessionId={props.readOnly ? null : session?.id ?? null}
+      setError={props.setError}
       onProvider={props.onProvider}
       onSend={() => void send(draft)}
       onAttach={() => {
@@ -818,9 +829,17 @@ function ChatStage(props: {
   // Streaming re-renders this component per token; the finished messages do not change meanwhile.
   const transcript = useMemo(() => session?.messages.map((message, index) => {
     const branches = branchesOf.get(message.id) ?? [];
+    if (message.role === "compaction") {
+      return (
+        <details key={message.id} id={`message-${message.id}`} className="compaction">
+          <summary>{t("chat.compacted")}</summary>
+          <MessageBody text={message.text} dark={dark} />
+        </details>
+      );
+    }
     return (
       <article key={message.id} id={`message-${message.id}`} className={`bubble ${message.role}`}>
-        <div className="who">{message.role === "user" ? t("chat.you") : session.model} <span>#{index + 1}</span></div>
+        <div className="who">{message.role === "user" ? t("chat.you") : modelName(provider, session.model)} <span>#{index + 1}</span></div>
         {message.reasoning && <details className="reasoning"><summary>{t("chat.reasoning")}</summary><pre>{message.reasoning}</pre></details>}
         {editingId === message.id ? <textarea value={editText} onChange={(event) => setEditText(event.target.value)} /> : message.text && <MessageBody text={message.text} dark={dark} />}
         {message.tool_calls.map((tool) => <ToolCard key={tool.id} t={t} tool={tool} />)}
@@ -840,7 +859,7 @@ function ChatStage(props: {
       </article>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, branchesOf, editingId, editText, props.busy, props.readOnly, dark, props.lang]);
+  }), [session, branchesOf, editingId, editText, props.busy, props.readOnly, dark, props.lang, provider]);
 
   if (empty && !props.readOnly) {
     return (
@@ -919,39 +938,126 @@ function ChatStage(props: {
 }
 
 function ModelMenu(props: {
+  t: (key: Key) => string;
+  lang: Lang;
+  sessionId: string | null;
   providers: Provider[];
   providerId: string;
   model: string;
+  setError: SetError;
   onPick: (providerId: string, model: string) => void;
 }) {
+  const { t } = props;
   const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<ChatOptions | null>(null);
   const current = props.providers.find((item) => item.id === props.providerId);
-  const label = current ? `${current.name} · ${props.model || current.model}` : props.model || "Grok 4.7";
   const groups = props.providers.filter((item) => item.enabled && providerModels(item).length > 0);
+  const model = props.model || current?.model || "";
+
+  useEffect(() => {
+    if (!current || !model) {
+      setOptions(null);
+      return;
+    }
+    let live = true;
+    chatOptions(props.sessionId, current.id, model)
+      .then((value) => { if (live) setOptions(value); })
+      .catch(() => { if (live) setOptions(null); });
+    return () => { live = false; };
+  }, [props.sessionId, current, model]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [open]);
+
+  function choose(change: { effort?: ReasoningEffort; contextWindow?: number }) {
+    if (!current) return;
+    setChatOptions(props.sessionId, current.id, model, change)
+      .then(setOptions)
+      .catch((reason: unknown) => props.setError(describe(reason)));
+  }
+
+  const effort = options?.efforts.find((option) => option.value === options.effort);
+  const parts = [current ? modelName(current, model) : model || "Grok 4.7"];
+  if (effort) parts.push(effortName(props.lang, effort.value, effort.label));
+  if (options) parts.push(formatWindow(options.context_window));
+  const label = current ? `${current.name} · ${parts.join(" · ")}` : parts.join(" · ");
+  const hasEffort = (options?.efforts.length ?? 0) > 0;
+  const hasWindows = (options?.context_windows.length ?? 0) > 1;
   return (
     <div className="model-menu" onClick={(event) => event.stopPropagation()}>
-      <button type="button" className="model-pick" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <button type="button" className="model-pick" aria-haspopup="listbox" aria-expanded={open} title={label} onClick={() => setOpen((value) => !value)}>
         {label} ▾
       </button>
       {open && (
-        <div className="model-pop" role="listbox">
-          {groups.map((provider) => (
-            <div key={provider.id} className="model-group">
-              <div className="model-group__name">{provider.name}</div>
-              {providerModels(provider).map((model) => (
-                <button
-                  key={`${provider.id}-${model}`}
-                  type="button"
-                  role="option"
-                  aria-selected={provider.id === props.providerId && model === props.model}
-                  className={provider.id === props.providerId && model === props.model ? "on" : ""}
-                  onClick={() => { props.onPick(provider.id, model); setOpen(false); }}
-                >
-                  {model}
-                </button>
-              ))}
+        <div className={hasEffort || hasWindows ? "model-pop wide" : "model-pop"}>
+          <div className="model-list" role="listbox" aria-label={t("prov.modelId")}>
+            {groups.map((provider) => (
+              <div key={provider.id} className="model-group">
+                <div className="model-group__name">{provider.name}</div>
+                {providerModels(provider).map((id) => {
+                  const on = provider.id === props.providerId && id === model;
+                  const name = modelName(provider, id);
+                  return (
+                    <button
+                      key={`${provider.id}-${id}`}
+                      type="button"
+                      role="option"
+                      aria-selected={on}
+                      className={on ? "on" : ""}
+                      title={id}
+                      onClick={() => { if (!on) props.onPick(provider.id, id); }}
+                    >
+                      <span>{name}</span>
+                      {name !== id && <span className="model-id">{id}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          {options && (hasEffort || hasWindows) && (
+            <div className="model-options">
+              {hasEffort && (
+                <div className="model-option" role="radiogroup" aria-label={t("model.effort")}>
+                  <div className="model-group__name">{t("model.effort")}</div>
+                  {options.efforts.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={option.value === options.effort}
+                      className={option.value === options.effort ? "on" : ""}
+                      title={option.description ?? undefined}
+                      onClick={() => choose({ effort: option.value })}
+                    >
+                      {effortName(props.lang, option.value, option.label)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="model-option" role="radiogroup" aria-label={t("model.context")}>
+                <div className="model-group__name">{t("model.context")}</div>
+                {hasWindows ? options.context_windows.map((window) => (
+                  <button
+                    key={window}
+                    type="button"
+                    role="radio"
+                    aria-checked={window === options.context_window}
+                    className={window === options.context_window ? "on" : ""}
+                    onClick={() => choose({ contextWindow: window })}
+                  >
+                    {formatWindow(window)}
+                  </button>
+                )) : <div className="model-static">{formatWindow(options.context_window)}</div>}
+                <div className="hint">{t("model.compactAt").replace("{percent}", String(options.compact_at_percent))}</div>
+              </div>
+              <div className="hint">{t("model.defaultHint")}</div>
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -973,6 +1079,9 @@ function Composer(props: {
   setBranchName: (value: string) => void;
   cwd: string;
   model: string;
+  lang: Lang;
+  sessionId: string | null;
+  setError: SetError;
   onProvider: (id: string, model: string) => Promise<void>;
   onSend: () => void;
   onAttach: () => void;
@@ -1013,9 +1122,13 @@ function Composer(props: {
         <div className="composer-actions">
           <button type="button" className="plus" onClick={props.onAttach}>+</button>
           <ModelMenu
+            t={props.t}
+            lang={props.lang}
+            sessionId={props.sessionId}
             providers={props.providers}
             providerId={props.provider?.id ?? ""}
             model={props.model || props.provider?.model || ""}
+            setError={props.setError}
             onPick={(providerId, model) => void props.onProvider(providerId, model)}
           />
           <span className="send-hint">{props.t("chat.sendHint")}</span>
