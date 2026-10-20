@@ -663,6 +663,7 @@ function ChatStage(props: {
   const [live, setLive] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [status, setStatus] = useState<string[]>([]);
+  const [pending, setPending] = useState<string | null>(null);
   const [tools, setTools] = useState<Session["messages"][number]["tool_calls"]>([]);
   const [approval, setApproval] = useState<{ id: string; name: string; arguments: string } | null>(null);
   const [allowed, setAllowed] = useState<string[]>([]);
@@ -714,6 +715,7 @@ function ChatStage(props: {
         return;
       }
       setDraft("");
+      setPending(trimmed);
       setLive("");
       setReasoning("");
       setStatus([]);
@@ -736,8 +738,12 @@ function ChatStage(props: {
         if (event.type === "error") props.setError(event.message);
       };
       const next = await sendPrompt(target.id, trimmed, onEvent, props.plan, target.model);
+      setPending(null);
+      setLive("");
       await props.onSession(next);
     } catch (reason) {
+      setPending(null);
+      setLive("");
       props.setError(describe(reason));
       if (target) {
         // The backend saves what it already has (the prompt, any partial reply).
@@ -752,6 +758,7 @@ function ChatStage(props: {
         setDraft((value) => value || trimmed);
       }
     } finally {
+      setPending(null);
       setLive("");
       setReasoning("");
       setStatus([]);
@@ -875,6 +882,12 @@ function ChatStage(props: {
           </button>
         )}
         {transcript}
+        {props.busy && pending && (
+          <article className="bubble user pending">
+            <div className="who">{t("chat.you")}</div>
+            <MessageBody text={pending} dark={dark} streaming />
+          </article>
+        )}
         {props.busy && (
           <article className="bubble assistant">
             <div className="who">{t("chat.thinking")}</div>

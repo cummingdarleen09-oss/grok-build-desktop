@@ -132,7 +132,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: none;
   border: 1px solid var(--line);
 }
-.send-hint { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.send-hint { margin-left: auto; min-width: 0; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .send {
   display: inline-flex; align-items: center; gap: 4px; flex: none; height: 28px; padding: 0 12px;
   border-radius: 999px; background: #111; color: #fff; border: 1px solid #111; font-weight: 560;
@@ -141,7 +141,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .send:disabled { opacity: 0.35; cursor: default; }
 [data-theme="dark"] .send { background: #f4f4f5; color: #111; border-color: #f4f4f5; }
 .model-menu { position: relative; min-width: 0; }
-.model-pick { color: var(--text); border: 0; background: transparent; max-width: 240px; text-align: left; }
+.model-pick { color: var(--text); border: 0; background: transparent; max-width: 240px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-pop {
   position: absolute; z-index: 25; bottom: 32px; left: 0; width: 260px; max-height: 280px; overflow: auto;
   background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px;
@@ -277,3 +277,5 @@ fieldset.field legend { margin-bottom: 6px; }
 .diagnostics code { user-select: all; }
 .boot-state { max-width: 720px; }
 .boot-error { white-space: pre-wrap; word-break: break-word; background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.text > span { white-space: pre-wrap; }
+.bubble.pending { opacity: 0.85; }
