@@ -73,19 +73,26 @@ impl TurnOptions {
     /// The chat's choice when the model offers it, then the saved default for
     /// the model, then the model's own default.
     pub fn resolve(provider: &ProviderConfig, session: &Session, saved: &ModelDefault) -> Self {
+        let chat = ModelDefault {
+            reasoning_effort: session.reasoning_effort,
+            context_window: session.context_window,
+        };
+        Self::choose(provider, &chat, saved)
+    }
+
+    /// [`Self::resolve`] for a chat that may not exist yet.
+    pub fn choose(provider: &ProviderConfig, chat: &ModelDefault, saved: &ModelDefault) -> Self {
         let options = provider.model_options(&provider.model);
         let offered_effort =
             |value: &ReasoningEffort| options.efforts.iter().any(|option| option.value == *value);
         let effort = options.effort(
-            session
-                .reasoning_effort
+            chat.reasoning_effort
                 .filter(offered_effort)
                 .or(saved.reasoning_effort.filter(offered_effort)),
         );
         let offered_window = |window: &u64| options.context_windows.contains(window);
         let context_window = options.context_window(
-            session
-                .context_window
+            chat.context_window
                 .filter(offered_window)
                 .or(saved.context_window.filter(offered_window)),
         );

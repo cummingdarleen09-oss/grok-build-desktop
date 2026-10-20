@@ -19,17 +19,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use grok_desktop_core::{
-    AgentEvent, Automation, DesktopSettings, ExtensionRecord, McpPool, MediaFile, Session,
-    SessionSummary, TurnControl, branch_session, create_session, delete_session,
-    discover_extensions, list_media, list_sessions, load_automations, load_classic_session,
-    load_session, load_settings, process, rename_session, render_mermaid, run_turn,
-    save_automations, save_session, save_settings, tr,
+    AgentEvent, Automation, DesktopSettings, ExtensionRecord, McpPool, MediaFile, ModelDefault,
+    Session, SessionSummary, TurnControl, TurnOptions, branch_session, create_session,
+    delete_session, discover_extensions, list_media, list_sessions, load_automations,
+    load_classic_session, load_session, load_settings, model_default_key, process, rename_session,
+    render_mermaid, run_turn, save_automations, save_session, save_settings, tr,
 };
 use grok_providers::{
-    ProviderClient, ProviderConfig, ProviderFormat, ProviderStore, SecretLocation, SecretStore,
-    Turn, XaiSecretSource, apply_choice, apply_known_models, fetch_provider_models,
-    has_login_session, load_or_default_store, normalize_store, refresh_xai_models,
-    save_provider_store, sync_cli_config,
+    ModelListAuth, ProviderClient, ProviderConfig, ProviderFormat, ProviderStore, ReasoningEffort,
+    ReasoningEffortOption, SecretLocation, SecretStore, Turn, XaiSecretSource, apply_choice,
+    apply_known_models, fetch_provider_models, has_login_session, load_or_default_store,
+    normalize_store, refresh_xai_model_list, save_provider_store, session_identity,
+    sync_cli_config,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -183,33 +184,45 @@ async fn refresh_models(app: AppHandle) {
             .iter()
             .find(|provider| provider.id == "xai")
             .cloned();
-        let key = match &xai {
-            Some(xai) => secrets.resolve(xai, None).ok().flatten(),
+        let found = match &xai {
+            Some(xai) => secrets.resolve_with_source(xai, None).ok().flatten(),
             None => None,
         };
-        Ok((xai, key))
+        Ok((xai, found, session_identity()))
     })
     .await;
-    let Ok((Some(xai), Some(key))) = prepared else {
+    let Ok((Some(xai), Some((key, source)), identity)) = prepared else {
         return;
     };
-    let started = Instant::now();
-    let choice = match tokio::time::timeout(
-        Duration::from_secs(8),
-        refresh_xai_models(&xai.base_url, Some(&key)),
-    )
-    .await
-    {
-        Ok(choice) => choice,
-        Err(_) => {
-            diag::warn("xAI model refresh timed out; using the cached list");
-            return;
+    let mut routed = xai.clone();
+    route_xai_session(&mut routed, source);
+    let auth = if routed.base_url != xai.base_url {
+        ModelListAuth::Session {
+            token: &key,
+            user_id: identity.user_id.as_deref(),
+            email: identity.email.as_deref(),
+            client_version: env!("CARGO_PKG_VERSION"),
+        }
+    } else {
+        ModelListAuth::ApiKey {
+            base_url: &xai.base_url,
+            key: &key,
         }
     };
+    let started = Instant::now();
+    let choice =
+        match tokio::time::timeout(Duration::from_secs(8), refresh_xai_model_list(auth)).await {
+            Ok(choice) => choice,
+            Err(_) => {
+                diag::warn("xAI model refresh timed out; using the cached list");
+                return;
+            }
+        };
     diag::info(&format!(
-        "xAI model refresh {} ms, newest {}",
+        "xAI model refresh ({source:?}) {} ms, newest {}, {} models",
         started.elapsed().as_millis(),
-        choice.latest
+        choice.latest,
+        choice.models.len()
     ));
     let secrets = app.state::<AppState>().secrets.clone();
     let saved = blocking("models.save", move || {
@@ -246,8 +259,13 @@ fn user_name() -> String {
 }
 
 #[tauri::command]
-async fn save_desktop_settings(settings: DesktopSettings) -> Result<(), String> {
-    blocking("save_settings", move || save_settings(&settings)).await
+async fn save_desktop_settings(mut settings: DesktopSettings) -> Result<(), String> {
+    blocking("save_settings", move || {
+        // Only set_chat_options writes these; the window's copy may be stale.
+        settings.model_defaults = load_settings().model_defaults;
+        save_settings(&settings)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -566,11 +584,23 @@ async fn send_prompt(
     let Ok(_turn) = state.turn.try_lock() else {
         return Err(tr(&lang, "busy"));
     };
+    let options = TurnOptions::resolve(
+        &provider,
+        &session,
+        &settings.model_default(&provider.id, &provider.model),
+    );
     let (api_key, source) = credential_for(&state.secrets, &provider, &lang).await?;
     route_xai_session(&mut provider, source);
     diag::info(&format!(
-        "send: chat {session_id} provider {} ({:?}) model {} via {} key {:?}, plan {plan}",
-        provider.id, provider.format, provider.model, provider.base_url, source
+        "send: chat {session_id} provider {} ({:?}) model {} via {} key {:?}, plan {plan}, effort {:?}, window {} (compact at {}%)",
+        provider.id,
+        provider.format,
+        provider.model,
+        provider.base_url,
+        source,
+        options.effort,
+        options.context_window,
+        options.compact_at_percent
     ));
     let emit = |event: AgentEvent| {
         let _ = app.emit(
@@ -642,6 +672,7 @@ async fn send_prompt(
         &settings.disabled_tools,
         &state.client,
         &TurnControl { cancel },
+        options,
         pool,
         |event| {
             if first_output.is_none()
@@ -769,10 +800,131 @@ async fn test_provider(
 async fn set_chat_model(id: String, provider_id: String, model: String) -> Result<Session, String> {
     blocking("set_chat_model", move || {
         let mut session = load_session(&id)?;
+        if session.provider_id != provider_id || session.model != model {
+            session.reasoning_effort = None;
+            session.context_window = None;
+        }
         session.provider_id = provider_id;
         session.model = model;
         save_session(&session)?;
         Ok(session)
+    })
+    .await
+}
+
+/// What the composer offers for one model and what the next request uses.
+#[derive(Serialize)]
+struct ChatOptions {
+    efforts: Vec<ReasoningEffortOption>,
+    effort: Option<ReasoningEffort>,
+    context_windows: Vec<u64>,
+    context_window: u64,
+    compact_at_percent: u8,
+}
+
+/// The chat's own choice applies only while the chat still uses `model`.
+fn chat_choice(session: Option<&Session>, provider_id: &str, model: &str) -> ModelDefault {
+    match session {
+        Some(session) if session.provider_id == provider_id && session.model == model => {
+            ModelDefault {
+                reasoning_effort: session.reasoning_effort,
+                context_window: session.context_window,
+            }
+        }
+        _ => ModelDefault::default(),
+    }
+}
+
+fn resolve_chat_options(
+    settings: &DesktopSettings,
+    session: Option<&Session>,
+    provider_id: &str,
+    model: &str,
+) -> Result<ChatOptions, String> {
+    let store = load_or_default_store();
+    let mut provider = store
+        .providers
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| tr(&settings.lang, "no_provider"))?;
+    if !model.trim().is_empty() {
+        provider.model = model.to_string();
+    }
+    let menu = provider.model_options(&provider.model);
+    let chosen = TurnOptions::choose(
+        &provider,
+        &chat_choice(session, provider_id, &provider.model),
+        &settings.model_default(provider_id, &provider.model),
+    );
+    Ok(ChatOptions {
+        efforts: menu.efforts,
+        effort: chosen.effort,
+        context_windows: menu.context_windows,
+        context_window: chosen.context_window,
+        compact_at_percent: chosen.compact_at_percent,
+    })
+}
+
+#[tauri::command]
+async fn chat_options(
+    session_id: Option<String>,
+    provider_id: String,
+    model: String,
+) -> Result<ChatOptions, String> {
+    blocking("chat_options", move || {
+        let settings = load_settings();
+        let session = session_id
+            .filter(|id| !id.is_empty())
+            .and_then(|id| load_session(&id).ok());
+        resolve_chat_options(&settings, session.as_ref(), &provider_id, &model)
+    })
+    .await
+}
+
+/// Save the effort and/or context window for the chat (when there is one)
+/// and as the default for this model in new chats.
+#[tauri::command]
+async fn set_chat_options(
+    session_id: Option<String>,
+    provider_id: String,
+    model: String,
+    effort: Option<ReasoningEffort>,
+    context_window: Option<u64>,
+) -> Result<ChatOptions, String> {
+    blocking("set_chat_options", move || {
+        let mut settings = load_settings();
+        let saved = settings
+            .model_defaults
+            .entry(model_default_key(&provider_id, &model))
+            .or_default();
+        if effort.is_some() {
+            saved.reasoning_effort = effort;
+        }
+        if context_window.is_some() {
+            saved.context_window = context_window;
+        }
+        save_settings(&settings)?;
+        let mut session = session_id
+            .filter(|id| !id.is_empty())
+            .and_then(|id| load_session(&id).ok());
+        if let Some(session) = session.as_mut()
+            && session.provider_id == provider_id
+            && session.model == model
+        {
+            if effort.is_some() {
+                session.reasoning_effort = effort;
+            }
+            if context_window.is_some() {
+                session.context_window = context_window;
+            }
+            save_session(session)?;
+        }
+        let options = resolve_chat_options(&settings, session.as_ref(), &provider_id, &model)?;
+        diag::info(&format!(
+            "chat options {provider_id}/{model}: effort {:?}, window {}",
+            options.effort, options.context_window
+        ));
+        Ok(options)
     })
     .await
 }
@@ -999,6 +1151,8 @@ pub fn run() {
             resolve_approval,
             test_provider,
             set_chat_model,
+            chat_options,
+            set_chat_options,
             fetch_models,
             open_classic,
             account::grok_account,
