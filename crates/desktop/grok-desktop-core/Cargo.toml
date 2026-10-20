@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 blake3 = { workspace = true }
 chrono = { workspace = true }
+dirs = { workspace = true }
 futures-util = { workspace = true }
 grok-providers = { workspace = true }
 mermaid-to-svg = { workspace = true }

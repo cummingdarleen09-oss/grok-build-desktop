@@ -42,6 +42,10 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// Progress the user should see while no text is streaming yet.
+    Status {
+        text: String,
+    },
     Done,
 }
 
@@ -51,6 +55,7 @@ pub struct TurnControl {
 
 type EventStream = Pin<Box<dyn futures_util::Stream<Item = Result<ProviderEvent, String>> + Send>>;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_turn<F, Fut>(
     session: &mut Session,
     provider: &ProviderConfig,
@@ -62,6 +67,7 @@ pub async fn run_turn<F, Fut>(
     disabled_tools: &[String],
     client: &ProviderClient,
     control: &TurnControl,
+    mcp: &mut McpPool,
     mut on_event: impl FnMut(AgentEvent),
     mut approve: F,
 ) -> Result<(), String>
@@ -77,13 +83,9 @@ where
                 "write_file" | "search_replace" | "run_terminal"
             )
         });
-    }
-    let mut mcp = if plan {
-        McpPool::empty()
     } else {
-        McpPool::connect().await
-    };
-    tools.extend(mcp.tool_defs());
+        tools.extend(mcp.tool_defs());
+    }
     let user = ChatMessage {
         id: new_id(),
         role: "user".into(),
@@ -114,9 +116,9 @@ where
                     tools: &tools,
                 })
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.detailed())?;
             let boxed: EventStream =
-                Box::pin(stream.map(|event| event.map_err(|error| error.to_string())));
+                Box::pin(stream.map(|event| event.map_err(|error| error.detailed())));
             Ok(boxed)
         }
     };
@@ -127,7 +129,7 @@ where
         plan,
         ask,
         &tools,
-        &mut mcp,
+        mcp,
         control,
         &mut on_event,
         &mut approve,
@@ -170,15 +172,24 @@ where
         let mut reasoning = String::new();
         let mut calls: Vec<StoredTool> = Vec::new();
         let mut stop = None;
+        let mut failure = None;
         while let Some(event) = stream.next().await {
             if control.cancel.load(Ordering::Relaxed) {
+                keep_partial(session, &mut text, &mut reasoning);
                 on_event(AgentEvent::Error {
                     message: tr(lang, "cancelled"),
                 });
                 on_event(AgentEvent::Done);
                 return Ok(());
             }
-            match event? {
+            let event = match event {
+                Ok(event) => event,
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            };
+            match event {
                 ProviderEvent::Text { text: delta } => {
                     text.push_str(&delta);
                     on_event(AgentEvent::TextDelta { text: delta });
@@ -227,6 +238,10 @@ where
                 ProviderEvent::Usage { .. } => {}
                 ProviderEvent::Stop { reason } => stop = Some(reason),
             }
+        }
+        if let Some(error) = failure {
+            keep_partial(session, &mut text, &mut reasoning);
+            return Err(error);
         }
         calls.retain(|call| !call.name.is_empty() || !call.id.is_empty());
         for call in &mut calls {
@@ -332,6 +347,22 @@ where
     }
     on_event(AgentEvent::Done);
     Ok(())
+}
+
+/// Save text that already streamed before a failure or a cancel, so the user
+/// does not lose a long partial answer.
+fn keep_partial(session: &mut Session, text: &mut String, reasoning: &mut String) {
+    if text.trim().is_empty() && reasoning.trim().is_empty() {
+        return;
+    }
+    session.messages.push(ChatMessage {
+        id: new_id(),
+        role: "assistant".into(),
+        text: std::mem::take(text),
+        reasoning: std::mem::take(reasoning),
+        tool_calls: Vec::new(),
+    });
+    touch(session);
 }
 
 fn transcript(session: &Session, lang: &str, plan: bool) -> Vec<Turn> {
@@ -460,5 +491,46 @@ mod tests {
                 .any(|message| message.text.contains("Updated"))
         );
         assert!(events.iter().any(|event| matches!(event, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn a_stream_error_keeps_the_partial_reply_and_is_returned() {
+        let mut session = create_session("/tmp", "relay", "gpt-5", "New chat");
+        session.messages.push(ChatMessage {
+            id: "u1".into(),
+            role: "user".into(),
+            text: "hi".into(),
+            reasoning: String::new(),
+            tool_calls: Vec::new(),
+        });
+        let control = TurnControl {
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        let result = drive(
+            &mut session,
+            "en",
+            false,
+            false,
+            &tool_defs("en", &[]),
+            &mut McpPool::empty(),
+            &control,
+            &mut |_event| {},
+            &mut |_id, _name, _args| async { true },
+            |_turns| async {
+                let events: Vec<Result<ProviderEvent, String>> = vec![
+                    Ok(ProviderEvent::Text {
+                        text: "half an ans".into(),
+                    }),
+                    Err("connection reset".into()),
+                ];
+                let boxed: EventStream = Box::pin(stream::iter(events));
+                Ok(boxed)
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "connection reset");
+        let last = session.messages.last().unwrap();
+        assert_eq!(last.role, "assistant");
+        assert_eq!(last.text, "half an ans");
     }
 }

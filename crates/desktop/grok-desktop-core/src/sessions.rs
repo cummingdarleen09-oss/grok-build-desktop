@@ -386,9 +386,10 @@ fn migrate_flat_sessions(home: &Path) -> Result<(), String> {
     if !root.exists() {
         return Ok(());
     }
-    let entries = std::fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
@@ -405,22 +406,39 @@ fn migrate_flat_sessions(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The fields a sidebar row needs. Message bodies are skipped while parsing,
+/// which keeps listing fast when transcripts are large.
+#[derive(Deserialize)]
+struct SessionHeader {
+    id: String,
+    title: String,
+    cwd: String,
+    provider_id: String,
+    model: String,
+    updated_at: String,
+    #[serde(default)]
+    parent_session_id: Option<String>,
+    #[serde(default)]
+    branched_from_message_id: Option<String>,
+    #[serde(default)]
+    branched_at_index: Option<u32>,
+}
+
 fn read_desktop_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
     let root = desktop_root(home);
-    if !root.exists() {
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return Ok(Vec::new());
-    }
+    };
     let mut sessions = Vec::new();
-    let entries = std::fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+    for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        let nested = std::fs::read_dir(&path).map_err(|error| error.to_string())?;
-        for file in nested {
-            let file = file.map_err(|error| error.to_string())?;
+        let Ok(nested) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for file in nested.flatten() {
             let file_path = file.path();
             if file_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
@@ -428,10 +446,21 @@ fn read_desktop_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
             let Ok(text) = std::fs::read_to_string(&file_path) else {
                 continue;
             };
-            let Ok(session) = serde_json::from_str::<Session>(&text) else {
+            let Ok(header) = serde_json::from_str::<SessionHeader>(&text) else {
                 continue;
             };
-            sessions.push(summarize(&session, "desktop"));
+            sessions.push(SessionSummary {
+                id: header.id,
+                title: header.title,
+                model: header.model,
+                provider_id: header.provider_id,
+                cwd: header.cwd,
+                updated_at: header.updated_at,
+                parent_session_id: header.parent_session_id,
+                branched_from_message_id: header.branched_from_message_id,
+                branched_at_index: header.branched_at_index,
+                origin: "desktop".into(),
+            });
         }
     }
     Ok(sessions)
@@ -439,13 +468,13 @@ fn read_desktop_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
 
 fn read_classic_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
     let root = home.join("sessions");
-    if !root.exists() {
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return Ok(Vec::new());
-    }
+    };
     let mut sessions = Vec::new();
-    let entries = std::fs::read_dir(&root).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+    let mut normalized: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for entry in entries.flatten() {
         let cwd_dir = entry.path();
         if !cwd_dir.is_dir() {
             continue;
@@ -509,7 +538,10 @@ fn read_classic_sessions(home: &Path) -> Result<Vec<SessionSummary>, String> {
                 title,
                 model,
                 provider_id: "classic".into(),
-                cwd: normalize_project_path(&cwd),
+                cwd: normalized
+                    .entry(cwd.clone())
+                    .or_insert_with(|| normalize_project_path(&cwd))
+                    .clone(),
                 updated_at,
                 parent_session_id: value
                     .get("parent_session_id")
@@ -663,21 +695,6 @@ fn collect_text(value: &serde_json::Value, found: &mut String) {
             }
         }
         _ => {}
-    }
-}
-
-fn summarize(session: &Session, origin: &str) -> SessionSummary {
-    SessionSummary {
-        id: session.id.clone(),
-        title: session.title.clone(),
-        model: session.model.clone(),
-        provider_id: session.provider_id.clone(),
-        cwd: session.cwd.clone(),
-        updated_at: session.updated_at.clone(),
-        parent_session_id: session.parent_session_id.clone(),
-        branched_from_message_id: session.branched_from_message_id.clone(),
-        branched_at_index: session.branched_at_index,
-        origin: origin.to_string(),
     }
 }
 
